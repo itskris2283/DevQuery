@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import MainLayout from "@/components/layout/main-layout";
@@ -10,39 +10,130 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Loader2, Search } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { useToast } from "@/hooks/use-toast";
+import { queryClient } from "@/lib/queryClient";
+import { User, Message } from "@shared/schema";
+
+// Extended message type for WebSocket messages that include sender information
+type WebSocketMessage = Message & {
+  sender?: Omit<User, "password">;
+};
+
+// Type for chat entry from the API
+type ChatEntry = {
+  user: Omit<User, "password">;
+  lastMessage: Message;
+  unreadCount: number;
+};
 
 export default function MessagesPage() {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [location, navigate] = useLocation();
   const search = useSearch();
   const searchParams = new URLSearchParams(search);
   const initialUserId = searchParams.get("userId");
   
-  const [selectedUser, setSelectedUser] = useState<any>(null);
+  const [selectedUser, setSelectedUser] = useState<Omit<User, "password"> | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const socketRef = useRef<WebSocket | null>(null);
+
+  // Set up global WebSocket connection for message notifications
+  useEffect(() => {
+    // Skip if user is not logged in
+    if (!user) return;
+    
+    // If we already have a socket, don't create a new one
+    if (socketRef.current?.readyState === WebSocket.OPEN) return;
+    
+    // Close any existing socket
+    if (socketRef.current) {
+      socketRef.current.close();
+    }
+    
+    // Create WebSocket connection
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const ws = new WebSocket(wsUrl);
+    
+    ws.onopen = () => {
+      console.log("Messages page: WebSocket connection established");
+      
+      // Register the WebSocket connection with the user's ID
+      ws.send(JSON.stringify({
+        type: 'register',
+        userId: user.id
+      }));
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'new_message') {
+          const message = data.message as WebSocketMessage;
+          
+          // If chat window is not open for this sender, show a notification
+          if (!selectedUser || selectedUser.id !== message.senderId) {
+            // Get the sender info from the extended chatMessage object sent by the server
+            const senderName = message.sender?.username || 'Someone';
+            
+            toast({
+              title: "New message",
+              description: `${senderName}: ${message.content.substring(0, 50)}${message.content.length > 50 ? '...' : ''}`,
+            });
+          }
+          
+          // Refresh chat list
+          queryClient.invalidateQueries({ queryKey: ['/api/messages/chats'] });
+        }
+      } catch (error) {
+        console.error("Error processing WebSocket message:", error);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+    };
+    
+    ws.onclose = () => {
+      console.log("WebSocket connection closed");
+    };
+    
+    socketRef.current = ws;
+    
+    // Clean up on unmount
+    return () => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    };
+  }, [user, toast]);
 
   // Fetch user chats
-  const { data: chats, isLoading: isLoadingChats } = useQuery({
+  const { data: chats, isLoading: isLoadingChats } = useQuery<ChatEntry[]>({
     queryKey: ['/api/messages/chats'],
     enabled: !!user,
   });
 
   // Fetch specific user if userId is in URL
-  const { data: specificUser, isLoading: isLoadingSpecificUser } = useQuery({
+  const { data: specificUser, isLoading: isLoadingSpecificUser } = useQuery<Omit<User, "password">>({
     queryKey: [`/api/users/${initialUserId}`],
     enabled: !!initialUserId && !!user,
-    onSuccess: (data) => {
-      if (data) {
-        setSelectedUser(data);
-      }
-    },
   });
+  
+  // Handle specificUser effect
+  useEffect(() => {
+    if (specificUser) {
+      setSelectedUser(specificUser);
+    }
+  }, [specificUser]);
 
   // Search for users
-  const { data: searchResults, isLoading: isSearching } = useQuery({
+  const { data: searchResults, isLoading: isSearching } = useQuery<Omit<User, "password">[]>({
     queryKey: ['/api/users/search', { query: searchQuery }],
     queryFn: async () => {
-      if (!searchQuery || searchQuery.length < 2) return null;
+      if (!searchQuery || searchQuery.length < 2) return [];
       
       const response = await fetch(`/api/users/search?q=${encodeURIComponent(searchQuery)}`);
       if (!response.ok) {
@@ -55,7 +146,7 @@ export default function MessagesPage() {
   });
 
   // Handle search selection
-  const handleSelectSearchResult = (user: any) => {
+  const handleSelectSearchResult = (user: Omit<User, "password">) => {
     setSelectedUser(user);
     setSearchQuery("");
     // Update URL
@@ -63,7 +154,7 @@ export default function MessagesPage() {
   };
 
   // Handle chat selection
-  const handleSelectChat = (chat: any) => {
+  const handleSelectChat = (chat: ChatEntry) => {
     setSelectedUser(chat.user);
     // Update URL
     navigate(`/messages?userId=${chat.user.id}`);
@@ -95,7 +186,7 @@ export default function MessagesPage() {
                       <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
                     </div>
                   ) : searchResults && searchResults.length > 0 ? (
-                    searchResults.map((result) => (
+                    searchResults.map((result: Omit<User, "password">) => (
                       <div
                         key={result.id}
                         className="p-3 hover:bg-accent cursor-pointer border-b last:border-0"
@@ -103,7 +194,7 @@ export default function MessagesPage() {
                       >
                         <div className="flex items-center">
                           <Avatar className="h-8 w-8 mr-2">
-                            <AvatarImage src={result.avatarUrl} alt={result.username} />
+                            <AvatarImage src={result.avatarUrl || undefined} alt={result.username} />
                             <AvatarFallback>{result.username.substring(0, 2).toUpperCase()}</AvatarFallback>
                           </Avatar>
                           <div>
@@ -139,7 +230,7 @@ export default function MessagesPage() {
                   </div>
                 ))
               ) : chats && chats.length > 0 ? (
-                chats.map((chat) => (
+                chats.map((chat: ChatEntry) => (
                   <div
                     key={chat.user.id}
                     className={`p-3 border-b hover:bg-accent cursor-pointer ${
@@ -150,7 +241,7 @@ export default function MessagesPage() {
                     <div className="flex items-center">
                       <div className="relative mr-3">
                         <Avatar className="h-10 w-10">
-                          <AvatarImage src={chat.user.avatarUrl} alt={chat.user.username} />
+                          <AvatarImage src={chat.user.avatarUrl || undefined} alt={chat.user.username} />
                           <AvatarFallback>{chat.user.username.substring(0, 2).toUpperCase()}</AvatarFallback>
                         </Avatar>
                         <span

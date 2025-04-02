@@ -1,7 +1,6 @@
 import express, { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
-import { WebSocketServer } from "ws";
-import WebSocket from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { setupAuth } from "./auth";
 import { z } from "zod";
@@ -64,10 +63,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Create WebSocket server
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  
+  // Map to keep track of connected clients by user ID
+  const connectedClients = new Map<number, WebSocket[]>();
 
   // Set up WebSocket connection for chat
   wss.on('connection', (ws, req) => {
     console.log('WebSocket client connected');
+    let userId: number | null = null;
     
     // Send initial connection confirmation
     ws.send(JSON.stringify({ type: 'connection', message: 'Connected to DevQuery chat' }));
@@ -76,24 +79,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const message = JSON.parse(data.toString());
         
-        if (message.type === 'chat') {
-          // This code path should no longer be hit, as we've removed WebSocket sending from the client
-          // We keep it as a backup but log a warning
-          console.warn('Received chat message via WebSocket - this should not happen with the updated client');
-          
-          const { senderId, receiverId, content } = message;
-          
-          if (!senderId || !receiverId || !content) {
+        // Register client with a user ID
+        if (message.type === 'register') {
+          userId = parseInt(message.userId);
+          if (!isNaN(userId)) {
+            console.log(`Registering WebSocket client for user ID: ${userId}`);
+            
+            // Add this connection to the map
+            if (!connectedClients.has(userId)) {
+              connectedClients.set(userId, []);
+            }
+            connectedClients.get(userId)?.push(ws);
+            
+            // Confirm registration
             ws.send(JSON.stringify({
-              type: 'error',
-              message: 'Invalid message format'
+              type: 'registered',
+              userId
             }));
-            return;
           }
-          
-          // We no longer create messages through the WebSocket
-          // Instead, we only broadcast messages that were created through the REST API
         }
+        // We don't implement message sending via WebSocket anymore
+        // That's handled through the REST API
         
       } catch (error) {
         console.error('Error processing WebSocket message:', error);
@@ -106,6 +112,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     ws.on('close', () => {
       console.log('WebSocket client disconnected');
+      
+      // Remove this connection from the map if user was registered
+      if (userId !== null) {
+        const userConnections = connectedClients.get(userId);
+        if (userConnections) {
+          const index = userConnections.indexOf(ws);
+          if (index !== -1) {
+            userConnections.splice(index, 1);
+          }
+          
+          // Remove the entry completely if no connections left
+          if (userConnections.length === 0) {
+            connectedClients.delete(userId);
+          }
+        }
+      }
     });
   });
 
@@ -573,15 +595,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const message = await storage.createMessage(validatedData);
       
-      // Broadcast the message to all connected WebSocket clients
-      wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: 'chat',
-            message
-          }));
+      // Notify recipient via WebSocket if they are connected
+      if (connectedClients.has(validatedData.receiverId)) {
+        const recipientConnections = connectedClients.get(validatedData.receiverId);
+        if (recipientConnections && recipientConnections.length > 0) {
+          console.log(`Sending message notification to user ${validatedData.receiverId}`);
+          
+          // Get sender info to include in notification
+          const sender = await storage.getUser(req.user.id);
+          if (sender) {
+            const { password, ...senderWithoutPassword } = sender;
+            
+            // Send to all connections for this user (in case they have multiple tabs/devices)
+            recipientConnections.forEach(ws => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'new_message',
+                  message: {
+                    ...message,
+                    sender: senderWithoutPassword
+                  }
+                }));
+              }
+            });
+          }
         }
-      });
+      }
       
       res.status(201).json(message);
     } catch (error) {

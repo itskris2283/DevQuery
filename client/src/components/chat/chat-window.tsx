@@ -11,6 +11,11 @@ import { Loader2, Send, Phone, Video, Info } from "lucide-react";
 import MessageList from "./message-list";
 import { User, Message } from "@shared/schema";
 
+// Extended message type for WebSocket messages that include sender information
+type WebSocketMessage = Message & {
+  sender?: Omit<User, "password">;
+};
+
 type ChatWindowProps = {
   selectedUser: Omit<User, "password">;
 };
@@ -67,14 +72,37 @@ export default function ChatWindow({ selectedUser }: ChatWindowProps) {
 
     ws.onopen = () => {
       console.log("WebSocket connection established");
+      
+      // Register the WebSocket connection with the user's ID
+      ws.send(JSON.stringify({
+        type: 'register',
+        userId: user.id
+      }));
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         
-        if (data.type === 'chat') {
-          const chatMessage = data.message as Message;
+        if (data.type === 'connection') {
+          console.log("WebSocket connection confirmation:", data.message);
+        } 
+        else if (data.type === 'registered') {
+          console.log("WebSocket registration successful for user:", data.userId);
+        }
+        else if (data.type === 'new_message') {
+          const chatMessage = data.message as WebSocketMessage;
+          
+          // Show a toast notification for new messages
+          if (chatMessage.senderId !== user.id) {
+            // Get the sender info from the extended chatMessage object sent by the server
+            const senderName = chatMessage.sender?.username || 'Someone';
+            
+            toast({
+              title: "New message",
+              description: `${senderName}: ${chatMessage.content.substring(0, 50)}${chatMessage.content.length > 50 ? '...' : ''}`,
+            });
+          }
           
           // If this message is part of the current conversation
           if (
@@ -108,7 +136,7 @@ export default function ChatWindow({ selectedUser }: ChatWindowProps) {
         ws.close();
       }
     };
-  }, [user, selectedUser.id]);
+  }, [user, selectedUser.id, toast]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -136,7 +164,7 @@ export default function ChatWindow({ selectedUser }: ChatWindowProps) {
       <div className="p-3 border-b flex items-center justify-between">
         <div className="flex items-center">
           <Avatar className="h-8 w-8 mr-3">
-            <AvatarImage src={selectedUser.avatarUrl || ''} alt={selectedUser.username} />
+            <AvatarImage src={selectedUser.avatarUrl || undefined} alt={selectedUser.username} />
             <AvatarFallback>{selectedUser.username.substring(0, 2).toUpperCase()}</AvatarFallback>
           </Avatar>
           <div>
