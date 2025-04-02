@@ -63,7 +63,13 @@ export default function QuestionPage() {
   }
 
   if (!question) {
-    return null; // This will be caught by the useEffect above
+    return (
+      <MainLayout>
+        <div className="flex justify-center items-center py-20">
+          <p>Question not found.</p>
+        </div>
+      </MainLayout>
+    );
   }
 
   return (

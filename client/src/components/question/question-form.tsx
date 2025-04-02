@@ -28,6 +28,8 @@ export default function QuestionForm() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  // Use tagsInput for form and handle conversion to array internally
+  const [tagsInput, setTagsInput] = useState("");
 
   const form = useForm<QuestionWithTags>({
     resolver: zodResolver(questionWithTagsSchema),
@@ -120,17 +122,6 @@ export default function QuestionForm() {
 
   const onSubmit = async (data: QuestionWithTags) => {
     try {
-      // Process tags (convert comma-separated string to array)
-      let processedTags: string[] = [];
-      if (typeof data.tags === "string") {
-        processedTags = (data.tags as string)
-          .split(",")
-          .map((tag: string) => tag.trim().toLowerCase())
-          .filter((tag: string) => tag.length > 0);
-      } else if (Array.isArray(data.tags)) {
-        processedTags = data.tags;
-      }
-
       // Upload image if present
       let imageUrl: string | undefined;
       if (imageFile) {
@@ -140,10 +131,13 @@ export default function QuestionForm() {
         setIsUploading(false);
       }
 
-      // Submit question
+      // Submit question - ensure tags are always arrays
       await submitQuestionMutation.mutateAsync({
         ...data,
-        tags: processedTags,
+        // Make sure tags are lowercase for consistency
+        tags: Array.isArray(data.tags) 
+          ? data.tags.map(tag => tag.toLowerCase()) 
+          : [],
         imageUrl,
       });
     } catch (error) {
@@ -209,9 +203,17 @@ export default function QuestionForm() {
                   <FormControl>
                     <Input
                       placeholder="e.g. react,node.js,authentication (comma separated)"
-                      {...field}
-                      onChange={(e) => field.onChange(e.target.value)}
-                      value={typeof field.value === "string" ? field.value : field.value.join(",")}
+                      value={tagsInput}
+                      onChange={(e) => {
+                        setTagsInput(e.target.value);
+                        // Convert the string input to an array of tags
+                        const tagsArray = e.target.value
+                          .split(",")
+                          .map(tag => tag.trim())
+                          .filter(tag => tag.length > 0);
+                        // Update the form field with the array
+                        field.onChange(tagsArray);
+                      }}
                     />
                   </FormControl>
                   <FormDescription>

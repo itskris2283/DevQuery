@@ -1,4 +1,5 @@
 import { pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -18,6 +19,17 @@ export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
   createdAt: true,
 });
+
+// Define relationships for users
+export const usersRelations = relations(users, ({ many }) => ({
+  questions: many(questions),
+  answers: many(answers),
+  votes: many(votes),
+  sentMessages: many(messages, { relationName: 'sender' }),
+  receivedMessages: many(messages, { relationName: 'receiver' }),
+  following: many(follows, { relationName: 'follower' }),
+  followers: many(follows, { relationName: 'following' }),
+}));
 
 // Questions table
 export const questions = pgTable("questions", {
@@ -39,6 +51,17 @@ export const insertQuestionSchema = createInsertSchema(questions).omit({
   updatedAt: true,
 });
 
+// Define relationships for questions
+export const questionsRelations = relations(questions, ({ one, many }) => ({
+  user: one(users, {
+    fields: [questions.userId],
+    references: [users.id],
+  }),
+  answers: many(answers),
+  questionTags: many(questionTags),
+  votes: many(votes),
+}));
+
 // Tags table
 export const tags = pgTable("tags", {
   id: serial("id").primaryKey(),
@@ -48,6 +71,11 @@ export const tags = pgTable("tags", {
 export const insertTagSchema = createInsertSchema(tags).omit({
   id: true,
 });
+
+// Define relationships for tags
+export const tagsRelations = relations(tags, ({ many }) => ({
+  questionTags: many(questionTags),
+}));
 
 // Question Tags join table
 export const questionTags = pgTable("question_tags", {
@@ -59,6 +87,18 @@ export const questionTags = pgTable("question_tags", {
 export const insertQuestionTagSchema = createInsertSchema(questionTags).omit({
   id: true,
 });
+
+// Define relationships for question tags join table
+export const questionTagsRelations = relations(questionTags, ({ one }) => ({
+  question: one(questions, {
+    fields: [questionTags.questionId],
+    references: [questions.id],
+  }),
+  tag: one(tags, {
+    fields: [questionTags.tagId],
+    references: [tags.id],
+  }),
+}));
 
 // Answers table
 export const answers = pgTable("answers", {
@@ -80,6 +120,19 @@ export const insertAnswerSchema = createInsertSchema(answers).omit({
   updatedAt: true,
 });
 
+// Define relationships for answers
+export const answersRelations = relations(answers, ({ one, many }) => ({
+  question: one(questions, {
+    fields: [answers.questionId],
+    references: [questions.id],
+  }),
+  user: one(users, {
+    fields: [answers.userId],
+    references: [users.id],
+  }),
+  votes: many(votes),
+}));
+
 // Votes table - for both questions and answers
 export const votes = pgTable("votes", {
   id: serial("id").primaryKey(),
@@ -95,6 +148,22 @@ export const insertVoteSchema = createInsertSchema(votes).omit({
   createdAt: true,
 });
 
+// Define relationships for votes
+export const votesRelations = relations(votes, ({ one }) => ({
+  user: one(users, {
+    fields: [votes.userId],
+    references: [users.id],
+  }),
+  question: one(questions, {
+    fields: [votes.questionId],
+    references: [questions.id],
+  }),
+  answer: one(answers, {
+    fields: [votes.answerId],
+    references: [answers.id],
+  }),
+}));
+
 // Follows table
 export const follows = pgTable("follows", {
   id: serial("id").primaryKey(),
@@ -107,6 +176,20 @@ export const insertFollowSchema = createInsertSchema(follows).omit({
   id: true,
   createdAt: true,
 });
+
+// Define relationships for follows
+export const followsRelations = relations(follows, ({ one }) => ({
+  follower: one(users, {
+    fields: [follows.followerId],
+    references: [users.id],
+    relationName: 'follower',
+  }),
+  following: one(users, {
+    fields: [follows.followingId],
+    references: [users.id],
+    relationName: 'following',
+  }),
+}));
 
 // Messages table
 export const messages = pgTable("messages", {
@@ -123,6 +206,20 @@ export const insertMessageSchema = createInsertSchema(messages).omit({
   read: true,
   createdAt: true,
 });
+
+// Define relationships for messages
+export const messagesRelations = relations(messages, ({ one }) => ({
+  sender: one(users, {
+    fields: [messages.senderId],
+    references: [users.id],
+    relationName: 'sender',
+  }),
+  receiver: one(users, {
+    fields: [messages.receiverId],
+    references: [users.id],
+    relationName: 'receiver',
+  }),
+}));
 
 // Type exports
 export type User = typeof users.$inferSelect;

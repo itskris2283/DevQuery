@@ -12,6 +12,7 @@ import {
 
 import session from "express-session";
 import createMemoryStore from "memorystore";
+import { DatabaseStorage } from './database-storage';
 
 const MemoryStore = createMemoryStore(session);
 
@@ -726,4 +727,5 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+// Use DatabaseStorage instead of MemStorage for PostgreSQL integration
+export const storage = new DatabaseStorage();
