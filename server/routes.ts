@@ -542,6 +542,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const recentChats = await storage.getRecentChats(req.user.id);
       
+      if (!recentChats || recentChats.length === 0) {
+        // Return empty array instead of error if no chats found
+        return res.json([]);
+      }
+      
       // Remove sensitive data
       const sanitizedChats = recentChats.map(chat => {
         const { password, ...userWithoutPassword } = chat.user;
@@ -554,7 +559,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(sanitizedChats);
     } catch (error) {
       console.error('Error fetching chats:', error);
-      res.status(500).json({ message: 'Failed to fetch chats' });
+      // Return empty array instead of error for better client experience
+      res.json([]);
     }
   });
 
@@ -565,6 +571,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     try {
       const otherUserId = parseInt(req.params.userId);
+      
+      if (isNaN(otherUserId)) {
+        return res.status(400).json({ message: 'Invalid user ID' });
+      }
+      
+      // Verify the other user exists
+      const otherUser = await storage.getUser(otherUserId);
+      if (!otherUser) {
+        return res.json([]);  // Return empty array if user doesn't exist
+      }
+      
       const messages = await storage.getMessagesBetweenUsers(req.user.id, otherUserId);
       
       // Mark all messages as read if they are sent to the current user
@@ -577,7 +594,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(messages);
     } catch (error) {
       console.error('Error fetching messages:', error);
-      res.status(500).json({ message: 'Failed to fetch messages' });
+      // Return empty array instead of error for better client experience
+      res.json([]);
     }
   });
 

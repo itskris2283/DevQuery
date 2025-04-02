@@ -808,64 +808,104 @@ export class DatabaseStorage implements IStorage {
       .where(eq(messages.receiverId, userId))
       .groupBy(messages.senderId);
     
-    // Combine both queries with a UNION
-    const allChats = await db.execute(
-      sql`${sentMessages.toSQL().sql} UNION ${receivedMessages.toSQL().sql}`
-    );
+    // Get all unique user IDs that the current user has messaged or received messages from
+    const sentUserIds = await db
+      .select({ otherUserId: messages.receiverId })
+      .from(messages)
+      .where(eq(messages.senderId, userId))
+      .groupBy(messages.receiverId);
+    
+    const receivedUserIds = await db
+      .select({ otherUserId: messages.senderId })
+      .from(messages)
+      .where(eq(messages.receiverId, userId))
+      .groupBy(messages.senderId);
+    
+    // Combine the lists and remove duplicates
+    const uniqueUserIds = new Set<number>();
+    sentUserIds.forEach(row => uniqueUserIds.add(row.otherUserId));
+    receivedUserIds.forEach(row => uniqueUserIds.add(row.otherUserId));
+    const allUserIds = Array.from(uniqueUserIds);
     
     // Process the results
     const recentChats = await Promise.all(
-      allChats.map(async (chat: any) => {
-        const otherUserId = chat.otherUserId;
-        
-        // Get the user
-        const [user] = await db
-          .select()
-          .from(users)
-          .where(eq(users.id, otherUserId));
-        
-        if (!user) throw new Error(`User not found: ${otherUserId}`);
-        
-        // Get the last message
-        const [lastMessage] = await db
-          .select()
-          .from(messages)
-          .where(
-            or(
-              and(
-                eq(messages.senderId, userId),
-                eq(messages.receiverId, otherUserId)
-              ),
-              and(
-                eq(messages.senderId, otherUserId),
-                eq(messages.receiverId, userId)
+      allUserIds.map(async (otherUserId) => {
+        try {
+          // Get the user
+          const [user] = await db
+            .select()
+            .from(users)
+            .where(eq(users.id, otherUserId));
+          
+          if (!user) {
+            console.error(`User not found: ${otherUserId}`);
+            return null;
+          }
+          
+          // Get the last message
+          const lastMessageResults = await db
+            .select()
+            .from(messages)
+            .where(
+              or(
+                and(
+                  eq(messages.senderId, userId),
+                  eq(messages.receiverId, otherUserId)
+                ),
+                and(
+                  eq(messages.senderId, otherUserId),
+                  eq(messages.receiverId, userId)
+                )
               )
             )
-          )
-          .orderBy(desc(messages.createdAt))
-          .limit(1);
-        
-        // Get the unread count
-        const result = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(messages)
-          .where(
-            and(
-              eq(messages.senderId, otherUserId),
-              eq(messages.receiverId, userId),
-              eq(messages.read, false)
-            )
-          );
-        
-        const unreadCount = Number(result[0].count);
-        
-        return { user, lastMessage, unreadCount };
+            .orderBy(desc(messages.createdAt))
+            .limit(1);
+            
+          // If no messages exist between these users, skip
+          if (!lastMessageResults || lastMessageResults.length === 0) {
+            console.error(`No messages found between users ${userId} and ${otherUserId}`);
+            return null;
+          }
+          
+          const lastMessage = lastMessageResults[0];
+          
+          // Get the unread count
+          const result = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(messages)
+            .where(
+              and(
+                eq(messages.senderId, otherUserId),
+                eq(messages.receiverId, userId),
+                eq(messages.read, false)
+              )
+            );
+          
+          const unreadCount = Number(result[0].count);
+          
+          return { user, lastMessage, unreadCount };
+        } catch (error) {
+          console.error(`Error processing chat for user ${otherUserId}:`, error);
+          return null;
+        }
       })
     );
     
-    // Sort by most recent message
-    return recentChats.sort((a, b) => 
-      b.lastMessage.createdAt.getTime() - a.lastMessage.createdAt.getTime()
-    );
+    // Filter out null entries and sort by most recent message
+    const validChats = recentChats.filter(chat => chat !== null) as Array<{
+      user: User;
+      lastMessage: Message;
+      unreadCount: number;
+    }>;
+    
+    return validChats.sort((a, b) => {
+      // Convert to Date objects to handle both Date instances and string dates
+      const dateA = a.lastMessage.createdAt instanceof Date ? 
+        a.lastMessage.createdAt : new Date(a.lastMessage.createdAt);
+      const dateB = b.lastMessage.createdAt instanceof Date ? 
+        b.lastMessage.createdAt : new Date(b.lastMessage.createdAt);
+        
+      return dateB.getTime() - dateA.getTime();
+    });
   }
 }
