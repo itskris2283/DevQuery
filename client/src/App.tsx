@@ -12,7 +12,7 @@ import AuthPage from "@/pages/auth-page";
 import HomePage from "@/pages/home-page";
 import QuestionsPage from "@/pages/questions-page";
 import QuestionPage from "@/pages/question-page";
-import QuestionForm from "@/components/question/question-form";
+import QuestionFormPage from "@/pages/question-form-page";
 import UsersPage from "@/pages/users-page";
 import UserProfilePage from "@/pages/user-profile-page";
 import MessagesPage from "@/pages/messages-page";
@@ -29,12 +29,8 @@ function Router() {
       
       {/* Questions routes */}
       <ProtectedRoute path="/questions" component={QuestionsPage} />
+      <ProtectedRoute path="/questions/ask" component={QuestionFormPage} />
       <ProtectedRoute path="/questions/:id" component={QuestionPage} />
-      <ProtectedRoute path="/questions/ask" component={() => (
-        <div className="container mx-auto px-4 py-6 lg:pl-64">
-          <QuestionForm />
-        </div>
-      )} />
       
       {/* User routes */}
       <ProtectedRoute path="/users" component={UsersPage} />

@@ -77,7 +77,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const message = JSON.parse(data.toString());
         
         if (message.type === 'chat') {
-          // Handle chat messages
+          // This code path should no longer be hit, as we've removed WebSocket sending from the client
+          // We keep it as a backup but log a warning
+          console.warn('Received chat message via WebSocket - this should not happen with the updated client');
+          
           const { senderId, receiverId, content } = message;
           
           if (!senderId || !receiverId || !content) {
@@ -88,22 +91,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return;
           }
           
-          // Store the message
-          const newMessage = await storage.createMessage({
-            senderId,
-            receiverId,
-            content
-          });
-          
-          // Send to all connected clients who are part of this conversation
-          wss.clients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
-              client.send(JSON.stringify({
-                type: 'chat',
-                message: newMessage
-              }));
-            }
-          });
+          // We no longer create messages through the WebSocket
+          // Instead, we only broadcast messages that were created through the REST API
         }
         
       } catch (error) {
@@ -583,6 +572,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       const message = await storage.createMessage(validatedData);
+      
+      // Broadcast the message to all connected WebSocket clients
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({
+            type: 'chat',
+            message
+          }));
+        }
+      });
+      
       res.status(201).json(message);
     } catch (error) {
       if (error instanceof z.ZodError) {

@@ -23,7 +23,7 @@ export default function ChatWindow({ selectedUser }: ChatWindowProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   // Fetch messages between users
-  const { data: messages, isLoading } = useQuery({
+  const { data: messages, isLoading } = useQuery<Message[]>({
     queryKey: [`/api/messages/${selectedUser.id}`],
     enabled: !!user && !!selectedUser,
     refetchInterval: 5000, // Poll every 5 seconds as a fallback
@@ -115,19 +115,10 @@ export default function ChatWindow({ selectedUser }: ChatWindowProps) {
     
     if (!message.trim()) return;
     
-    // Send via REST API (for reliable delivery)
+    // Only send via REST API - WebSocket updates will happen via server broadcast
     sendMessageMutation.mutate(message.trim());
     
-    // Also send via WebSocket for real-time updates to other clients
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        type: 'chat',
-        senderId: user?.id,
-        receiverId: selectedUser.id,
-        content: message.trim()
-      }));
-    }
-    
+    // Clear the input field
     setMessage("");
   };
 
@@ -174,7 +165,7 @@ export default function ChatWindow({ selectedUser }: ChatWindowProps) {
       
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages && messages.length > 0 ? (
+        {messages && Array.isArray(messages) && messages.length > 0 ? (
           <MessageList messages={messages} currentUser={user} otherUser={selectedUser} />
         ) : (
           <div className="flex h-full items-center justify-center text-muted-foreground">
