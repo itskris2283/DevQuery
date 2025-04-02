@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { questionWithTagsSchema, QuestionWithTags } from "@shared/schema";
-import { useNavigate } from "wouter";
+import { useLocation } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -24,7 +24,7 @@ import { Image, X } from "lucide-react";
 
 export default function QuestionForm() {
   const { toast } = useToast();
-  const [_, navigate] = useNavigate();
+  const [_, setLocation] = useLocation();
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -70,7 +70,7 @@ export default function QuestionForm() {
         description: "Your question has been posted",
       });
       queryClient.invalidateQueries({ queryKey: ['/api/questions'] });
-      navigate(`/questions/${data.id}`);
+      setLocation(`/questions/${data.id}`);
     },
     onError: (error) => {
       toast({
@@ -123,10 +123,10 @@ export default function QuestionForm() {
       // Process tags (convert comma-separated string to array)
       let processedTags: string[] = [];
       if (typeof data.tags === "string") {
-        processedTags = data.tags
+        processedTags = (data.tags as string)
           .split(",")
-          .map((tag) => tag.trim().toLowerCase())
-          .filter((tag) => tag.length > 0);
+          .map((tag: string) => tag.trim().toLowerCase())
+          .filter((tag: string) => tag.length > 0);
       } else if (Array.isArray(data.tags)) {
         processedTags = data.tags;
       }

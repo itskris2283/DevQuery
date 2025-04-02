@@ -22,6 +22,7 @@
         padding: 20px;
         max-width: 800px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        display: none;
       }
       h1 {
         color: #333;
@@ -36,7 +37,7 @@
         white-space: pre-wrap;
       }
       #root {
-        display: none;
+        display: block;
       }
     </style>
   </head>
@@ -107,7 +108,7 @@
         log('Testing Vite WebSocket connection...');
         try {
           const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-          const ws = new WebSocket(`${protocol}//${window.location.host}`);
+          const ws = new WebSocket(`${protocol}//${window.location.host}/@vite/client`);
           
           ws.onopen = () => {
             log('Vite WebSocket connection opened successfully');
