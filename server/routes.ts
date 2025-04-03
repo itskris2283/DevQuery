@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { setupAuth } from "./auth";
+import { connectToDatabase } from "./mongo-db";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -50,6 +51,16 @@ const upload = multer({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  try {
+    // Initialize MongoDB connection
+    await connectToDatabase();
+    console.log('MongoDB connected successfully');
+  } catch (error) {
+    console.error('Failed to connect to MongoDB:', error);
+    // Continue regardless of MongoDB connection status
+    // to allow for fallback to other storage methods
+  }
+
   // Set up authentication routes
   setupAuth(app);
 

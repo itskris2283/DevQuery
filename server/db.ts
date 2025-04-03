@@ -28,6 +28,29 @@ let mysqlPool: mysql.Pool | null = null;
 let planetscaleConn: any = null;
 let db: any = null;
 
+// Helper function to run schema push
+function runSchemaPush(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    console.log("Executing schema push...");
+    exec('npm run db:push', (error: Error | null, stdout: string, stderr: string) => {
+      if (error) {
+        console.error(`Schema push error: ${error.message}`);
+        // Even if there's an error, try to continue
+        resolve();
+        return;
+      }
+      
+      if (stderr) {
+        console.log(`Schema push stderr: ${stderr}`);
+      }
+      
+      console.log(`Schema push output: ${stdout}`);
+      console.log("Database schema has been created successfully");
+      resolve();
+    });
+  });
+}
+
 // Function to automatically create database schema
 async function pushDatabaseSchema() {
   try {
@@ -42,39 +65,41 @@ async function pushDatabaseSchema() {
     
     let tableExists = false;
     
+    // Set a timeout for query execution (especially important in Replit)
+    const queryTimeout = 3000; // 3 seconds
+    
     if (mysqlPool) {
-      const [rows] = await mysqlPool.query(checkTableExistenceQuery);
-      const result = rows as any[];
-      tableExists = result[0].count > 0;
+      try {
+        // Execute query with a timeout
+        const queryPromise = mysqlPool.query(checkTableExistenceQuery);
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error(`Query timed out after ${queryTimeout}ms`)), queryTimeout);
+        });
+        
+        const [rows] = await Promise.race([queryPromise, timeoutPromise]) as any;
+        const result = rows as any[];
+        tableExists = result[0].count > 0;
+      } catch (error) {
+        console.warn(`Error checking table existence: ${error}`);
+        // Continue with schema push as a fallback
+        return runSchemaPush();
+      }
     } else if (planetscaleConn) {
-      const result = await planetscaleConn.execute(checkTableExistenceQuery);
-      tableExists = result.rows[0].count > 0;
+      try {
+        const result = await planetscaleConn.execute(checkTableExistenceQuery);
+        tableExists = result.rows[0].count > 0;
+      } catch (error) {
+        console.warn(`Error checking table existence in PlanetScale: ${error}`);
+        // Continue with schema push as a fallback
+        return runSchemaPush();
+      }
     } else {
       throw new Error("No database connection available");
     }
     
     if (!tableExists) {
       console.log("Database tables don't exist. Running schema push...");
-      
-      // Run the npm script
-      return new Promise<void>((resolve, reject) => {
-        exec('npm run db:push', (error: Error | null, stdout: string, stderr: string) => {
-          if (error) {
-            console.error(`Schema push error: ${error.message}`);
-            // Even if there's an error, try to continue
-            resolve();
-            return;
-          }
-          
-          if (stderr) {
-            console.log(`Schema push stderr: ${stderr}`);
-          }
-          
-          console.log(`Schema push output: ${stdout}`);
-          console.log("Database schema has been created successfully");
-          resolve();
-        });
-      });
+      return runSchemaPush();
     } else {
       console.log("Database tables already exist");
     }
@@ -100,7 +125,25 @@ if (process.env.DATABASE_URL) {
     } else {
       // For local MySQL instance
       console.log("Connecting to local MySQL database...");
-      mysqlPool = mysql.createPool(process.env.DATABASE_URL);
+      
+      // Set a reasonable connection timeout for Replit environment
+      const isReplitEnv = process.env.REPL_ID || process.env.REPL_OWNER || process.env.REPL_SLUG;
+      const connectionTimeout = isReplitEnv ? 5000 : 10000; // 5s in Replit, 10s elsewhere
+      
+      // Parse the connection URL to add the timeout
+      let connectionConfig = process.env.DATABASE_URL;
+      
+      // If it's a connection string, add the timeout parameter
+      if (typeof connectionConfig === 'string' && !connectionConfig.includes('connectTimeout')) {
+        // Add connectTimeout parameter if not already present
+        connectionConfig += connectionConfig.includes('?') 
+          ? '&connectTimeout=' + connectionTimeout
+          : '?connectTimeout=' + connectionTimeout;
+      }
+      
+      console.log(`Using connection timeout of ${connectionTimeout}ms`);
+      
+      mysqlPool = mysql.createPool(connectionConfig);
       db = drizzleMysql(mysqlPool, { schema, mode: 'default' });
     }
     

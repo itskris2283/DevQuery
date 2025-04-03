@@ -12,8 +12,11 @@ import {
 
 import session from "express-session";
 import createMemoryStore from "memorystore";
+import mongoose from 'mongoose';
 import { DatabaseStorage } from './database-storage';
+import { MongoStorage } from './mongo-storage';
 
+// Setup memory store for sessions when no database is available
 const MemoryStore = createMemoryStore(session);
 
 export interface IStorage {
@@ -747,18 +750,43 @@ import { db } from './db';
 
 let storage: IStorage;
 
-try {
-  if (db) {
-    console.log("Using database storage");
-    storage = new DatabaseStorage();
-  } else {
-    console.log("Database not available, using in-memory storage");
+// Determine which storage backend to use
+async function initStorage(): Promise<void> {
+  try {
+    // Try MongoDB first
+    if (process.env.MONGODB_URI) {
+      console.log("Attempting to use MongoDB storage...");
+      try {
+        // Check if mongoose is connected
+        if (mongoose.connection.readyState === 1) {
+          console.log("Using MongoDB storage with existing connection");
+          storage = new MongoStorage();
+          return;
+        }
+      } catch (mongoError) {
+        console.error("Error checking MongoDB connection:", mongoError);
+      }
+    }
+    
+    // Fall back to MySQL if MongoDB is not available
+    if (db) {
+      console.log("MongoDB not available, using MySQL database storage");
+      storage = new DatabaseStorage();
+      return;
+    }
+    
+    // Last resort: in-memory storage
+    console.log("No database available, using in-memory storage");
+    storage = new MemStorage();
+  } catch (error) {
+    console.error("Error initializing database storage:", error);
+    console.log("Falling back to in-memory storage due to error");
     storage = new MemStorage();
   }
-} catch (error) {
-  console.error("Error initializing database storage:", error);
-  console.log("Falling back to in-memory storage due to error");
-  storage = new MemStorage();
 }
+
+// Initialize storage (default to MemStorage until async initialization completes)
+storage = new MemStorage();
+initStorage().catch(err => console.error("Storage initialization failed:", err));
 
 export { storage };
