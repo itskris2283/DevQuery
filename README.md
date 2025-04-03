@@ -63,6 +63,7 @@ The application will be available at http://localhost:5000
 - If you don't have PostgreSQL installed, the application will automatically fall back to in-memory storage for development purposes
 - All file paths in the application use forward slashes (`/`) which are compatible with Windows
 - The application will automatically detect Windows and use appropriate network settings (using 'localhost' instead of '0.0.0.0')
+- If you still encounter binding issues, you can explicitly set `HOST=localhost` in your `.env` file
 - For production deployment on Windows, use the following command instead of `npm start`:
   ```
   set NODE_ENV=production && node dist/index.js
@@ -74,10 +75,42 @@ The application will be available at http://localhost:5000
 
 If you want to use PostgreSQL for persistent storage:
 
-1. Install PostgreSQL on your machine
-2. Create a new database
+1. Install PostgreSQL on your machine (recommended version: 13 or later)
+2. Create a new database: `createdb devquery`
 3. Update the `DATABASE_URL` in your `.env` file with the connection string
-4. The application will automatically create the necessary tables
+
+### PostgreSQL Connection on Windows
+
+If you're having issues connecting to PostgreSQL on Windows:
+
+1. **Local PostgreSQL setup**:
+   ```
+   # In your .env file:
+   DATABASE_URL=postgresql://username:password@localhost:5432/devquery
+   ```
+   Replace `username` and `password` with your actual PostgreSQL credentials.
+
+2. **PostgreSQL Authentication**:
+   - Make sure you've created a PostgreSQL user with a password
+   - The default PostgreSQL user on Windows is often your username with no password
+   - To create a new PostgreSQL user with password:
+     ```
+     # In psql or pgAdmin:
+     CREATE USER myuser WITH PASSWORD 'mypassword';
+     GRANT ALL PRIVILEGES ON DATABASE devquery TO myuser;
+     ```
+
+3. **Connection Issues Troubleshooting**:
+   - Check that PostgreSQL service is running (Services app in Windows)
+   - Verify your connection settings in `pg_hba.conf` 
+   - Try using `127.0.0.1` instead of `localhost` in your connection string
+   - If nothing works, you can use Neon Database (cloud PostgreSQL) which works on all platforms
+
+4. **Using a cloud database (Neon)** instead of local PostgreSQL:
+   - Sign up for a free account at https://neon.tech
+   - Create a new project and get your connection string
+   - Update your `.env` file with the provided connection string
+   - Format should be: `postgres://username:password@endpoint.neon.tech/neondb?sslmode=require`
 
 ## Project Structure
 

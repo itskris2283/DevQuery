@@ -28,14 +28,38 @@ export class DatabaseStorage implements IStorage {
   sessionStore: session.Store;
   
   constructor() {
+    const isWindows = process.platform === 'win32';
+    
     if (pool) {
-      // Use PostgreSQL for session storage if database is available
-      this.sessionStore = new PostgresSessionStore({ 
-        pool, 
-        createTableIfMissing: true
-      });
+      try {
+        // Try to create PostgreSQL session store with proper error handling
+        console.log("Creating PostgreSQL session store...");
+        
+        // Create session table options with better compatibility for different Postgres drivers
+        const sessionOptions = { 
+          pool: pool, 
+          createTableIfMissing: true,
+          tableName: 'session', // Explicitly naming the table for compatibility
+          errorLog: console.error, // Log store errors
+          // Avoid pruning on Windows to prevent potential issues
+          disableTouch: isWindows, 
+          // Shorter timeout to prevent locking issues on Windows
+          ttl: isWindows ? 3600 : 86400 
+        };
+        
+        this.sessionStore = new PostgresSessionStore(sessionOptions);
+        console.log("PostgreSQL session store created successfully");
+      } catch (error) {
+        // If PostgreSQL session store creation fails, fall back to memory store
+        console.error("Failed to create PostgreSQL session store:", error);
+        console.warn("Falling back to memory session store");
+        this.sessionStore = new MemoryStore({
+          checkPeriod: 86400000 // 24 hours
+        });
+      }
     } else {
-      // Fallback to memory storage if no database
+      // No database connection available, use memory store
+      console.log("No database connection, using memory session store");
       this.sessionStore = new MemoryStore({
         checkPeriod: 86400000 // 24 hours
       });

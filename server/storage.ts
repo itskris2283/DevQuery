@@ -18,7 +18,7 @@ const MemoryStore = createMemoryStore(session);
 
 export interface IStorage {
   // Session store
-  sessionStore: session.SessionStore;
+  sessionStore: session.Store;
 
   // User operations
   getUser(id: number): Promise<User | undefined>;
@@ -90,7 +90,7 @@ export class MemStorage implements IStorage {
   private follows: Map<number, Follow>;
   private messages: Map<number, Message>;
   
-  sessionStore: session.SessionStore;
+  sessionStore: session.Store;
   
   private userIdCounter: number;
   private questionIdCounter: number;

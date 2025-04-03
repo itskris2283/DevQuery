@@ -1,5 +1,7 @@
 import { Pool, neonConfig } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-serverless';
+import { drizzle as drizzleNeon } from 'drizzle-orm/neon-serverless';
+import pg from 'pg';
+import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import ws from "ws";
 import * as schema from "@shared/schema";
 import dotenv from 'dotenv';
@@ -23,10 +25,35 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = process.env.DATABASE_URL 
-  ? new Pool({ connectionString: process.env.DATABASE_URL }) 
-  : null;
+// Try to establish database connection - with better error handling for Windows
+let pool = null;
+let db = null;
 
-export const db = pool 
-  ? drizzle({ client: pool, schema }) 
-  : null;
+if (process.env.DATABASE_URL) {
+  try {
+    const isWindows = process.platform === 'win32';
+    const isNeonUrl = process.env.DATABASE_URL.includes('neon.tech');
+    
+    // Use different connection approach depending on URL type and platform
+    if (isNeonUrl) {
+      // For Neon database (cloud)
+      console.log("Connecting to Neon cloud database...");
+      pool = new Pool({ connectionString: process.env.DATABASE_URL });
+      db = drizzleNeon({ client: pool, schema });
+    } else {
+      // For local PostgreSQL instance
+      console.log("Connecting to local PostgreSQL database...");
+      pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+      db = drizzlePg(pool, { schema });
+    }
+    
+    console.log("Database connection established successfully");
+  } catch (error) {
+    console.error("Failed to connect to database:", error);
+    console.warn("Falling back to in-memory storage");
+    pool = null;
+    db = null;
+  }
+}
+
+export { pool, db };

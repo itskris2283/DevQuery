@@ -62,8 +62,14 @@ app.use((req, res, next) => {
   const port = process.env.PORT ? parseInt(process.env.PORT) : 5000;
   const isWindows = process.platform === 'win32';
   
-  // Use 'localhost' instead of '0.0.0.0' on Windows to avoid ENOTSUP error
-  const host = isWindows ? 'localhost' : '0.0.0.0';
+  // Use HOST from environment variable if available,
+  // otherwise use 'localhost' on Windows (to avoid ENOTSUP error)
+  // and use '0.0.0.0' on other platforms
+  const defaultHost = isWindows ? 'localhost' : '0.0.0.0';
+  const host = process.env.HOST || defaultHost;
+  
+  // Log startup configuration 
+  console.log(`Starting server on ${host}:${port} (Platform: ${process.platform})`);
   
   const listenOptions = {
     port,
