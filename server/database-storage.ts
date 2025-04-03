@@ -11,24 +11,21 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import session from "express-session";
-import connectPg from "connect-pg-simple";
-import { pool } from "./db";
+import { IStorage } from "./storage";
 import { 
   eq, and, or, desc, asc, sql, like, 
   isNull, isNotNull, gt, lt 
 } from "drizzle-orm";
-import { IStorage } from "./storage";
-
-const PostgresSessionStore = connectPg(session);
+// Using MemoryStore for sessions since we're using Neon serverless
+// which doesn't support the pool interface needed for PgSessionStore
 
 export class DatabaseStorage implements IStorage {
-  sessionStore: session.SessionStore;
+  sessionStore: session.Store;
   
   constructor() {
-    this.sessionStore = new PostgresSessionStore({ 
-      pool, 
-      createTableIfMissing: true
-    });
+    // We need to adapt for NeonDB which doesn't use pool
+    // Using a memory store temporarily until we can configure correct session store
+    this.sessionStore = new session.MemoryStore();
   }
 
   // User operations
@@ -53,6 +50,11 @@ export class DatabaseStorage implements IStorage {
         createdAt: new Date()
       })
       .returning();
+    
+    if (!user) {
+      throw new Error("User was inserted but could not be retrieved");
+    }
+    
     return user;
   }
 
@@ -276,6 +278,10 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     
+    if (!newQuestion) {
+      throw new Error("Question was inserted but could not be retrieved");
+    }
+    
     // Add tags
     for (const tagName of tagNames) {
       let tag = await this.getTagByName(tagName);
@@ -388,6 +394,11 @@ export class DatabaseStorage implements IStorage {
       .insert(tags)
       .values(tag)
       .returning();
+    
+    if (!newTag) {
+      throw new Error("Tag was inserted but could not be retrieved");
+    }
+    
     return newTag;
   }
 
@@ -409,6 +420,11 @@ export class DatabaseStorage implements IStorage {
       .insert(questionTags)
       .values({ questionId, tagId })
       .returning();
+    
+    if (!questionTag) {
+      throw new Error("Question tag was inserted but could not be retrieved");
+    }
+    
     return questionTag;
   }
 
@@ -507,7 +523,7 @@ export class DatabaseStorage implements IStorage {
   async createAnswer(userId: number, answer: InsertAnswer): Promise<Answer> {
     const now = new Date();
     
-    const [newAnswer] = await db
+    const result = await db
       .insert(answers)
       .values({
         ...answer,
@@ -515,8 +531,14 @@ export class DatabaseStorage implements IStorage {
         accepted: false,
         createdAt: now,
         updatedAt: now
-      })
-      .returning();
+      });
+      
+    const insertId = Number(result.insertId);
+    const [newAnswer] = await db.select().from(answers).where(eq(answers.id, insertId));
+    
+    if (!newAnswer) {
+      throw new Error("Answer was inserted but could not be retrieved");
+    }
     
     return newAnswer;
   }
@@ -529,15 +551,20 @@ export class DatabaseStorage implements IStorage {
     
     if (!answer) return undefined;
     
-    const [updatedAnswer] = await db
+    await db
       .update(answers)
       .set({
         ...answerData,
         updatedAt: new Date()
       })
-      .where(eq(answers.id, id))
-      .returning();
+      .where(eq(answers.id, id));
     
+    // Get the updated record
+    const [updatedAnswer] = await db
+      .select()
+      .from(answers)
+      .where(eq(answers.id, id));
+      
     return updatedAnswer;
   }
 
@@ -621,23 +648,34 @@ export class DatabaseStorage implements IStorage {
     
     // Update existing vote or create new one
     if (existingVote) {
-      const [updatedVote] = await db
+      await db
         .update(votes)
         .set({
           value: vote.value
         })
-        .where(eq(votes.id, existingVote.id))
-        .returning();
+        .where(eq(votes.id, existingVote.id));
       
+      // Get the updated vote
+      const [updatedVote] = await db
+        .select()
+        .from(votes)
+        .where(eq(votes.id, existingVote.id));
+        
       return updatedVote;
     } else {
-      const [newVote] = await db
+      const result = await db
         .insert(votes)
         .values({
           ...vote,
           createdAt: new Date()
-        })
-        .returning();
+        });
+      
+      const insertId = Number(result.insertId);
+      const [newVote] = await db.select().from(votes).where(eq(votes.id, insertId));
+      
+      if (!newVote) {
+        throw new Error("Vote was inserted but could not be retrieved");
+      }
       
       return newVote;
     }
@@ -689,13 +727,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createFollow(follow: InsertFollow): Promise<Follow> {
-    const [newFollow] = await db
+    const result = await db
       .insert(follows)
       .values({
         ...follow,
         createdAt: new Date()
-      })
-      .returning();
+      });
+      
+    const insertId = Number(result.insertId);
+    const [newFollow] = await db.select().from(follows).where(eq(follows.id, insertId));
+    
+    if (!newFollow) {
+      throw new Error("Follow was inserted but could not be retrieved");
+    }
     
     return newFollow;
   }
@@ -773,14 +817,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createMessage(message: InsertMessage): Promise<Message> {
-    const [newMessage] = await db
+    const result = await db
       .insert(messages)
       .values({
         ...message,
         read: false,
         createdAt: new Date()
-      })
-      .returning();
+      });
+      
+    const insertId = Number(result.insertId);
+    const [newMessage] = await db.select().from(messages).where(eq(messages.id, insertId));
+    
+    if (!newMessage) {
+      throw new Error("Message was inserted but could not be retrieved");
+    }
     
     return newMessage;
   }

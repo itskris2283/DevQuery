@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, varchar, integer, boolean, timestamp, text, serial } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -6,12 +6,12 @@ import { z } from "zod";
 // Users table
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
-  email: text("email").notNull(),
-  role: text("role").notNull().default("student"), // "student" or "teacher"
+  username: varchar("username", { length: 255 }).notNull().unique(),
+  password: varchar("password", { length: 255 }).notNull(),
+  email: varchar("email", { length: 255 }).notNull(),
+  role: varchar("role", { length: 50 }).notNull().default("student"), // "student" or "teacher"
   bio: text("bio"),
-  avatarUrl: text("avatar_url"),
+  avatarUrl: varchar("avatar_url", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -37,7 +37,7 @@ export const questions = pgTable("questions", {
   userId: integer("user_id").notNull().references(() => users.id),
   title: text("title").notNull(),
   content: text("content").notNull(),
-  imageUrl: text("image_url"),
+  imageUrl: varchar("image_url", { length: 255 }),
   solved: boolean("solved").default(false).notNull(),
   views: integer("views").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -66,7 +66,7 @@ export const questionsRelations = relations(questions, ({ one, many }) => ({
 // Tags table
 export const tags = pgTable("tags", {
   id: serial("id").primaryKey(),
-  name: text("name").notNull().unique(),
+  name: varchar("name", { length: 100 }).notNull().unique(),
 });
 
 export const insertTagSchema = createInsertSchema(tags).omit({
@@ -107,7 +107,7 @@ export const answers = pgTable("answers", {
   questionId: integer("question_id").notNull().references(() => questions.id),
   userId: integer("user_id").notNull().references(() => users.id),
   content: text("content").notNull(),
-  imageUrl: text("image_url"),
+  imageUrl: varchar("image_url", { length: 255 }),
   accepted: boolean("accepted").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
