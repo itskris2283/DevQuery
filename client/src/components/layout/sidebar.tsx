@@ -94,7 +94,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       {/* Sidebar */}
       <div
         className={cn(
-          "fixed inset-y-0 left-0 w-64 bg-white dark:bg-card border-r border-border transform transition-transform duration-200 ease-in-out z-30 pt-16 lg:pt-16 lg:translate-x-0",
+          "fixed inset-y-0 left-0 w-64 bg-white dark:bg-card border-r border-border transform transition-transform duration-200 ease-in-out z-20 pt-20 lg:pt-20 lg:translate-x-0",
           {
             "translate-x-0": isOpen,
             "-translate-x-full": !isOpen,

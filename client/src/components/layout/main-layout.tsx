@@ -64,7 +64,7 @@ export default function MainLayout({ children }: MainLayoutProps) {
   return (
     <div className="min-h-screen flex flex-col">
       {/* Header */}
-      <header className="bg-white dark:bg-card border-b border-border sticky top-0 z-10">
+      <header className="bg-white dark:bg-card border-b border-border sticky top-0 z-30">
         <div className="container mx-auto px-4">
           <div className="flex items-center justify-between h-16">
             {/* Mobile menu button */}
