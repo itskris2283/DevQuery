@@ -60,11 +60,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         socket.close();
       }
 
-      // Create WebSocket connection
+      // Create WebSocket connection with better cross-platform compatibility
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${window.location.host}/ws`;
       
       try {
+        console.log(`Connecting to WebSocket at: ${wsUrl}`);
         const newSocket = new WebSocket(wsUrl);
         setSocket(newSocket);
 

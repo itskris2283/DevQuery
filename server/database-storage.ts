@@ -18,26 +18,39 @@ import {
   isNull, isNotNull, gt, lt 
 } from "drizzle-orm";
 import { IStorage } from "./storage";
+import createMemoryStore from "memorystore";
 
+// Create PostgreSQL session store if available, otherwise fallback to memory store
+const MemoryStore = createMemoryStore(session);
 const PostgresSessionStore = connectPg(session);
 
 export class DatabaseStorage implements IStorage {
-  sessionStore: session.SessionStore;
+  sessionStore: session.Store;
   
   constructor() {
-    this.sessionStore = new PostgresSessionStore({ 
-      pool, 
-      createTableIfMissing: true
-    });
+    if (pool) {
+      // Use PostgreSQL for session storage if database is available
+      this.sessionStore = new PostgresSessionStore({ 
+        pool, 
+        createTableIfMissing: true
+      });
+    } else {
+      // Fallback to memory storage if no database
+      this.sessionStore = new MemoryStore({
+        checkPeriod: 86400000 // 24 hours
+      });
+    }
   }
 
   // User operations
   async getUser(id: number): Promise<User | undefined> {
+    if (!db) throw new Error("Database not available");
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
+    if (!db) throw new Error("Database not available");
     const [user] = await db
       .select()
       .from(users)
@@ -46,6 +59,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
+    if (!db) throw new Error("Database not available");
     const [user] = await db
       .insert(users)
       .values({
@@ -57,6 +71,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUsersByIds(ids: number[]): Promise<User[]> {
+    if (!db) throw new Error("Database not available");
     if (ids.length === 0) return [];
     return await db
       .select()
@@ -65,6 +80,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async searchUsers(query: string): Promise<User[]> {
+    if (!db) throw new Error("Database not available");
     const searchQuery = `%${query}%`;
     return await db
       .select()

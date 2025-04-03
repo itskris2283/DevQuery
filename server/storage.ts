@@ -741,5 +741,18 @@ export class MemStorage implements IStorage {
   }
 }
 
-// Use DatabaseStorage instead of MemStorage for PostgreSQL integration
-export const storage = new DatabaseStorage();
+// Check if we have a database connection available
+// If not, fallback to in-memory storage for development/testing purposes
+import { db } from './db';
+
+let storage: IStorage;
+
+if (db) {
+  console.log("Using database storage");
+  storage = new DatabaseStorage();
+} else {
+  console.log("Database not available, using in-memory storage");
+  storage = new MemStorage();
+}
+
+export { storage };
