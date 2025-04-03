@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { AuthProvider } from "@/hooks/use-auth";
 import { ProtectedRoute } from "@/lib/protected-route";
+import { NotificationProvider } from "@/components/notification/notification-provider";
 
 // Pages
 import NotFound from "@/pages/not-found";
@@ -55,8 +56,10 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthProvider>
-          <Router />
-          <Toaster />
+          <NotificationProvider>
+            <Router />
+            <Toaster />
+          </NotificationProvider>
         </AuthProvider>
       </ThemeProvider>
     </QueryClientProvider>

@@ -1,4 +1,4 @@
-import { ReactNode, useState } from 'react';
+import { ReactNode, useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { Bell, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Badge } from '@/components/ui/badge';
+import { Badge } from "@/components/ui/badge";
+import { NotificationIndicator } from '@/components/notification/notification-indicator';
+import { useNotifications } from '@/components/notification/notification-provider';
 import { useQuery } from '@tanstack/react-query';
 
 type MainLayoutProps = {
@@ -26,17 +28,23 @@ type MainLayoutProps = {
 export default function MainLayout({ children }: MainLayoutProps) {
   const [location, navigate] = useLocation();
   const { user, logoutMutation } = useAuth();
+  const { setUnreadCount } = useNotifications();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Get unread message count
-  const { data: chats } = useQuery({
+  const { data: chats = [] } = useQuery<Array<{unreadCount: number}>>({
     queryKey: ['/api/messages/chats'],
     enabled: !!user,
   });
 
-  // Calculate total unread messages
-  const unreadCount = chats?.reduce((count, chat) => count + chat.unreadCount, 0) || 0;
+  // Update notification state with DB data
+  useEffect(() => {
+    if (chats && chats.length > 0) {
+      const totalUnread = chats.reduce((count: number, chat) => count + (chat.unreadCount || 0), 0);
+      setUnreadCount(totalUnread);
+    }
+  }, [chats, setUnreadCount]);
 
   const handleLogout = () => {
     logoutMutation.mutate();
@@ -124,22 +132,8 @@ export default function MainLayout({ children }: MainLayoutProps) {
             <div className="flex items-center space-x-4">
               <ThemeToggle />
               
-              <Button
-                variant="ghost"
-                size="icon"
-                className="relative"
-                onClick={() => navigate('/messages')}
-              >
-                <Bell className="h-5 w-5" />
-                {unreadCount > 0 && (
-                  <Badge 
-                    variant="destructive" 
-                    className="absolute -top-1 -right-1 h-4 w-4 p-0 flex items-center justify-center text-[10px]"
-                  >
-                    {unreadCount > 9 ? '9+' : unreadCount}
-                  </Badge>
-                )}
-              </Button>
+              {/* Global notification indicator */}
+              <NotificationIndicator />
               
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

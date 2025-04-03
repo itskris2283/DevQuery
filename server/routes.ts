@@ -598,6 +598,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json([]);
     }
   });
+  
+  // Endpoint to mark all messages from a user as read
+  app.post('/api/messages/:userId/read', async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+    
+    try {
+      const otherUserId = parseInt(req.params.userId);
+      
+      if (isNaN(otherUserId)) {
+        return res.status(400).json({ message: 'Invalid user ID' });
+      }
+      
+      // Verify the other user exists
+      const otherUser = await storage.getUser(otherUserId);
+      if (!otherUser) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      // Get all messages between the users
+      const messages = await storage.getMessagesBetweenUsers(req.user.id, otherUserId);
+      
+      // Mark all messages from the other user as read
+      let markedCount = 0;
+      for (const message of messages) {
+        if (message.senderId === otherUserId && message.receiverId === req.user.id && !message.read) {
+          await storage.markMessageAsRead(message.id);
+          markedCount++;
+        }
+      }
+      
+      res.json({ success: true, markedCount });
+    } catch (error) {
+      console.error('Error marking messages as read:', error);
+      res.status(500).json({ message: 'Failed to mark messages as read' });
+    }
+  });
 
   app.post('/api/messages', async (req, res) => {
     if (!req.isAuthenticated()) {

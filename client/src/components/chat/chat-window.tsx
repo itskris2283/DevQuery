@@ -3,6 +3,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
+import { useNotifications } from "@/components/notification/notification-provider";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -23,6 +24,7 @@ type ChatWindowProps = {
 export default function ChatWindow({ selectedUser }: ChatWindowProps) {
   const { user } = useAuth();
   const { toast } = useToast();
+  const { incrementUnreadCount, resetUnreadCount } = useNotifications();
   const [message, setMessage] = useState("");
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -56,10 +58,37 @@ export default function ChatWindow({ selectedUser }: ChatWindowProps) {
     },
   });
 
-  // Scroll to bottom of messages
+  // Scroll to bottom of messages and mark messages as read
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (messages && messages.length > 0) {
+      // Scroll to bottom
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      
+      // Reset notification counter as user is viewing messages
+      resetUnreadCount();
+      
+      // Mark messages as read on the server
+      if (selectedUser && user) {
+        // We only need to make this API call if there are unread messages from this user
+        const hasUnreadMessages = messages.some(msg => 
+          msg.senderId === selectedUser.id && !msg.read
+        );
+        
+        if (hasUnreadMessages) {
+          fetch(`/api/messages/${selectedUser.id}/read`, {
+            method: 'POST',
+          })
+            .then(() => {
+              // Refresh the chat list to update the unread counts
+              queryClient.invalidateQueries({ queryKey: ['/api/messages/chats'] });
+            })
+            .catch(error => {
+              console.error('Error marking messages as read:', error);
+            });
+        }
+      }
+    }
+  }, [messages, selectedUser, user, resetUnreadCount]);
 
   // Set up WebSocket connection
   useEffect(() => {
@@ -93,26 +122,32 @@ export default function ChatWindow({ selectedUser }: ChatWindowProps) {
         else if (data.type === 'new_message') {
           const chatMessage = data.message as WebSocketMessage;
           
-          // Show a toast notification for new messages
+          // Only handle messages from other users
           if (chatMessage.senderId !== user.id) {
-            // Get the sender info from the extended chatMessage object sent by the server
             const senderName = chatMessage.sender?.username || 'Someone';
             
-            toast({
-              title: "New message",
-              description: `${senderName}: ${chatMessage.content.substring(0, 50)}${chatMessage.content.length > 50 ? '...' : ''}`,
-            });
-          }
-          
-          // If this message is part of the current conversation
-          if (
-            (chatMessage.senderId === user.id && chatMessage.receiverId === selectedUser.id) ||
-            (chatMessage.senderId === selectedUser.id && chatMessage.receiverId === user.id)
-          ) {
+            // If this is from the currently selected user, mark as read
+            if (chatMessage.senderId === selectedUser.id) {
+              // Show in current conversation
+              queryClient.invalidateQueries({ queryKey: [`/api/messages/${selectedUser.id}`] });
+              // Reset notification counter as user is actively viewing this chat
+              resetUnreadCount();
+            } else {
+              // It's from someone else, increment the notification counter
+              incrementUnreadCount();
+              
+              // Show notification toast
+              toast({
+                title: "New message",
+                description: `${senderName}: ${chatMessage.content.substring(0, 50)}${chatMessage.content.length > 50 ? '...' : ''}`,
+              });
+            }
+          } else if (chatMessage.receiverId === selectedUser.id) {
+            // This is a message from the current user to the selected user
             queryClient.invalidateQueries({ queryKey: [`/api/messages/${selectedUser.id}`] });
           }
           
-          // Update chats list
+          // Always update the chats list to reflect newest messages
           queryClient.invalidateQueries({ queryKey: ['/api/messages/chats'] });
         }
       } catch (error) {
@@ -136,7 +171,7 @@ export default function ChatWindow({ selectedUser }: ChatWindowProps) {
         ws.close();
       }
     };
-  }, [user, selectedUser.id, toast]);
+  }, [user, selectedUser.id, toast, incrementUnreadCount, resetUnreadCount]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
