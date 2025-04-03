@@ -15,6 +15,8 @@ type WebSocketMessage = {
     read: boolean;
     sender?: Omit<User, "password">;
   };
+  userIds?: number[];
+  userId?: number;
 };
 
 type NotificationContextType = {
@@ -22,6 +24,8 @@ type NotificationContextType = {
   setUnreadCount: (count: number) => void;
   incrementUnreadCount: () => void;
   resetUnreadCount: () => void;
+  onlineUserIds: number[];
+  isUserOnline: (userId: number) => boolean;
 };
 
 const NotificationContext = createContext<NotificationContextType | null>(null);
@@ -31,6 +35,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const { toast } = useToast();
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [onlineUserIds, setOnlineUserIds] = useState<number[]>([]);
 
   // Function to increment unread count
   const incrementUnreadCount = () => {
@@ -40,6 +45,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // Function to reset unread count
   const resetUnreadCount = () => {
     setUnreadCount(0);
+  };
+  
+  // Function to check if a user is online
+  const isUserOnline = (userId: number): boolean => {
+    return onlineUserIds.includes(userId);
   };
 
   // Setup WebSocket connection
@@ -83,6 +93,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
               // Increment unread count
               incrementUnreadCount();
             }
+            else if (data.type === "online_users" && data.userIds) {
+              // Update online users list
+              setOnlineUserIds(data.userIds);
+            }
           } catch (err) {
             console.error("Error parsing WebSocket message:", err);
           }
@@ -113,6 +127,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         setUnreadCount,
         incrementUnreadCount,
         resetUnreadCount,
+        onlineUserIds,
+        isUserOnline,
       }}
     >
       {children}

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
 import { useNotifications } from "@/components/notification/notification-provider";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -24,7 +25,7 @@ type ChatWindowProps = {
 export default function ChatWindow({ selectedUser }: ChatWindowProps) {
   const { user } = useAuth();
   const { toast } = useToast();
-  const { incrementUnreadCount, resetUnreadCount } = useNotifications();
+  const { incrementUnreadCount, resetUnreadCount, isUserOnline } = useNotifications();
   const [message, setMessage] = useState("");
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -203,7 +204,14 @@ export default function ChatWindow({ selectedUser }: ChatWindowProps) {
             <AvatarFallback>{selectedUser.username.substring(0, 2).toUpperCase()}</AvatarFallback>
           </Avatar>
           <div>
-            <h3 className="text-sm font-medium">{selectedUser.username}</h3>
+            <div className="flex items-center">
+              <h3 className="text-sm font-medium mr-2">{selectedUser.username}</h3>
+              {isUserOnline(selectedUser.id) && (
+                <Badge variant="outline" className="h-5 bg-green-500/10 text-green-500 border-green-200 px-1.5 text-xs">
+                  Online
+                </Badge>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">
               {selectedUser.role === "teacher" ? "Teacher" : "Student"}
             </p>

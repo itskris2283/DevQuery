@@ -66,6 +66,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Map to keep track of connected clients by user ID
   const connectedClients = new Map<number, WebSocket[]>();
+  
+  // Function to broadcast online users to all clients
+  const broadcastOnlineUsers = () => {
+    const onlineUserIds = Array.from(connectedClients.keys());
+    
+    const message = JSON.stringify({
+      type: 'online_users',
+      userIds: onlineUserIds
+    });
+    
+    // Send to all connected clients
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  };
 
   // Set up WebSocket connection for chat
   wss.on('connection', (ws, req) => {
@@ -96,6 +113,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
               type: 'registered',
               userId
             }));
+            
+            // Send current online users to the newly connected client
+            const onlineUserIds = Array.from(connectedClients.keys());
+            ws.send(JSON.stringify({
+              type: 'online_users',
+              userIds: onlineUserIds
+            }));
+            
+            // Broadcast updated online users list to all clients
+            broadcastOnlineUsers();
           }
         }
         // We don't implement message sending via WebSocket anymore
@@ -125,6 +152,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Remove the entry completely if no connections left
           if (userConnections.length === 0) {
             connectedClients.delete(userId);
+            
+            // Broadcast updated online users list
+            broadcastOnlineUsers();
           }
         }
       }

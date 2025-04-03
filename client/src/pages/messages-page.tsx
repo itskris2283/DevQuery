@@ -30,7 +30,7 @@ type ChatEntry = {
 export default function MessagesPage() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const { resetUnreadCount } = useNotifications();
+  const { resetUnreadCount, isUserOnline } = useNotifications();
   const [location, navigate] = useLocation();
   const search = useSearch();
   const searchParams = new URLSearchParams(search);
@@ -253,7 +253,7 @@ export default function MessagesPage() {
                         </Avatar>
                         <span
                           className={`absolute bottom-0 right-0 w-3 h-3 ${
-                            Math.random() > 0.5 ? "bg-green-500" : "bg-gray-300"
+                            isUserOnline(chat.user.id) ? "bg-green-500" : "bg-gray-300"
                           } border-2 border-background rounded-full`}
                         />
                       </div>
