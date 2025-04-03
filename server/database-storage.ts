@@ -11,21 +11,24 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import session from "express-session";
-import { IStorage } from "./storage";
+import connectPg from "connect-pg-simple";
+import { pool } from "./db";
 import { 
   eq, and, or, desc, asc, sql, like, 
   isNull, isNotNull, gt, lt 
 } from "drizzle-orm";
-// Using MemoryStore for sessions since we're using Neon serverless
-// which doesn't support the pool interface needed for PgSessionStore
+import { IStorage } from "./storage";
+
+const PostgresSessionStore = connectPg(session);
 
 export class DatabaseStorage implements IStorage {
-  sessionStore: session.Store;
+  sessionStore: session.SessionStore;
   
   constructor() {
-    // We need to adapt for NeonDB which doesn't use pool
-    // Using a memory store temporarily until we can configure correct session store
-    this.sessionStore = new session.MemoryStore();
+    this.sessionStore = new PostgresSessionStore({ 
+      pool, 
+      createTableIfMissing: true
+    });
   }
 
   // User operations
@@ -50,11 +53,6 @@ export class DatabaseStorage implements IStorage {
         createdAt: new Date()
       })
       .returning();
-    
-    if (!user) {
-      throw new Error("User was inserted but could not be retrieved");
-    }
-    
     return user;
   }
 
@@ -278,10 +276,6 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     
-    if (!newQuestion) {
-      throw new Error("Question was inserted but could not be retrieved");
-    }
-    
     // Add tags
     for (const tagName of tagNames) {
       let tag = await this.getTagByName(tagName);
@@ -394,11 +388,6 @@ export class DatabaseStorage implements IStorage {
       .insert(tags)
       .values(tag)
       .returning();
-    
-    if (!newTag) {
-      throw new Error("Tag was inserted but could not be retrieved");
-    }
-    
     return newTag;
   }
 
@@ -420,11 +409,6 @@ export class DatabaseStorage implements IStorage {
       .insert(questionTags)
       .values({ questionId, tagId })
       .returning();
-    
-    if (!questionTag) {
-      throw new Error("Question tag was inserted but could not be retrieved");
-    }
-    
     return questionTag;
   }
 
@@ -534,10 +518,6 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     
-    if (!newAnswer) {
-      throw new Error("Answer was inserted but could not be retrieved");
-    }
-    
     return newAnswer;
   }
 
@@ -549,20 +529,15 @@ export class DatabaseStorage implements IStorage {
     
     if (!answer) return undefined;
     
-    await db
+    const [updatedAnswer] = await db
       .update(answers)
       .set({
         ...answerData,
         updatedAt: new Date()
       })
-      .where(eq(answers.id, id));
+      .where(eq(answers.id, id))
+      .returning();
     
-    // Get the updated record
-    const [updatedAnswer] = await db
-      .select()
-      .from(answers)
-      .where(eq(answers.id, id));
-      
     return updatedAnswer;
   }
 
@@ -646,19 +621,14 @@ export class DatabaseStorage implements IStorage {
     
     // Update existing vote or create new one
     if (existingVote) {
-      await db
+      const [updatedVote] = await db
         .update(votes)
         .set({
           value: vote.value
         })
-        .where(eq(votes.id, existingVote.id));
+        .where(eq(votes.id, existingVote.id))
+        .returning();
       
-      // Get the updated vote
-      const [updatedVote] = await db
-        .select()
-        .from(votes)
-        .where(eq(votes.id, existingVote.id));
-        
       return updatedVote;
     } else {
       const [newVote] = await db
@@ -668,10 +638,6 @@ export class DatabaseStorage implements IStorage {
           createdAt: new Date()
         })
         .returning();
-      
-      if (!newVote) {
-        throw new Error("Vote was inserted but could not be retrieved");
-      }
       
       return newVote;
     }
@@ -730,10 +696,6 @@ export class DatabaseStorage implements IStorage {
         createdAt: new Date()
       })
       .returning();
-    
-    if (!newFollow) {
-      throw new Error("Follow was inserted but could not be retrieved");
-    }
     
     return newFollow;
   }
@@ -819,10 +781,6 @@ export class DatabaseStorage implements IStorage {
         createdAt: new Date()
       })
       .returning();
-    
-    if (!newMessage) {
-      throw new Error("Message was inserted but could not be retrieved");
-    }
     
     return newMessage;
   }
