@@ -523,7 +523,7 @@ export class DatabaseStorage implements IStorage {
   async createAnswer(userId: number, answer: InsertAnswer): Promise<Answer> {
     const now = new Date();
     
-    const result = await db
+    const [newAnswer] = await db
       .insert(answers)
       .values({
         ...answer,
@@ -531,10 +531,8 @@ export class DatabaseStorage implements IStorage {
         accepted: false,
         createdAt: now,
         updatedAt: now
-      });
-      
-    const insertId = Number(result.insertId);
-    const [newAnswer] = await db.select().from(answers).where(eq(answers.id, insertId));
+      })
+      .returning();
     
     if (!newAnswer) {
       throw new Error("Answer was inserted but could not be retrieved");
@@ -663,15 +661,13 @@ export class DatabaseStorage implements IStorage {
         
       return updatedVote;
     } else {
-      const result = await db
+      const [newVote] = await db
         .insert(votes)
         .values({
           ...vote,
           createdAt: new Date()
-        });
-      
-      const insertId = Number(result.insertId);
-      const [newVote] = await db.select().from(votes).where(eq(votes.id, insertId));
+        })
+        .returning();
       
       if (!newVote) {
         throw new Error("Vote was inserted but could not be retrieved");
@@ -727,15 +723,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createFollow(follow: InsertFollow): Promise<Follow> {
-    const result = await db
+    const [newFollow] = await db
       .insert(follows)
       .values({
         ...follow,
         createdAt: new Date()
-      });
-      
-    const insertId = Number(result.insertId);
-    const [newFollow] = await db.select().from(follows).where(eq(follows.id, insertId));
+      })
+      .returning();
     
     if (!newFollow) {
       throw new Error("Follow was inserted but could not be retrieved");
@@ -817,16 +811,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createMessage(message: InsertMessage): Promise<Message> {
-    const result = await db
+    const [newMessage] = await db
       .insert(messages)
       .values({
         ...message,
         read: false,
         createdAt: new Date()
-      });
-      
-    const insertId = Number(result.insertId);
-    const [newMessage] = await db.select().from(messages).where(eq(messages.id, insertId));
+      })
+      .returning();
     
     if (!newMessage) {
       throw new Error("Message was inserted but could not be retrieved");
