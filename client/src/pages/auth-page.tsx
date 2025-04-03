@@ -35,6 +35,7 @@ const loginSchema = z.object({
 const registerSchema = z.object({
   username: z.string().min(3, "Username must be at least 3 characters"),
   email: z.string().email("Invalid email address"),
+  fullName: z.string().min(1, "Full name is required"),
   password: z.string().min(6, "Password must be at least 6 characters"),
   role: z.enum(["student", "teacher"], {
     required_error: "You must select a role",
@@ -72,6 +73,7 @@ export default function AuthPage() {
     defaultValues: {
       username: "",
       email: "",
+      fullName: "",
       password: "",
       role: "student",
     },
@@ -244,6 +246,24 @@ export default function AuthPage() {
                             <FormControl>
                               <Input
                                 placeholder="johndoe"
+                                type="text"
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={registerForm.control}
+                        name="fullName"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Full Name</FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder="John Doe"
                                 type="text"
                                 {...field}
                               />

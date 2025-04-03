@@ -9,6 +9,7 @@ export const users = mysqlTable("users", {
   username: varchar("username", { length: 255 }).notNull().unique(),
   password: varchar("password", { length: 255 }).notNull(),
   email: varchar("email", { length: 255 }).notNull(),
+  fullName: varchar("full_name", { length: 255 }).notNull(),
   role: varchar("role", { length: 50 }).notNull().default("student"), // "student" or "teacher"
   bio: text("bio"),
   avatarUrl: varchar("avatar_url", { length: 255 }),

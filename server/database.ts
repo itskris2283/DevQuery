@@ -173,8 +173,15 @@ export class DatabaseStorage implements IStorage {
 
   async createUser(insertUser: InsertUser): Promise<User> {
     try {
-      const user = new UserModel(insertUser);
+      // Create a new user instance without saving yet
+      const user = new UserModel({
+        ...insertUser,
+        // Other fields will be added by the pre-save hook in the model
+      });
+      
+      // Save the user - let the model's pre-save hook handle the ID auto-increment
       await user.save();
+      
       return this.documentToUser(user);
     } catch (error) {
       console.error('Error creating user:', error);

@@ -77,6 +77,7 @@ export function setupAuth(app: Express) {
   // Extended user schema for registration
   const registerSchema = insertUserSchema.extend({
     email: z.string().email("Invalid email address"),
+    fullName: z.string().min(1, "Full name is required"),
     role: z.enum(["student", "teacher"]).default("student"),
   });
 
