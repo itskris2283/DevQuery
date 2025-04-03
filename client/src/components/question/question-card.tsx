@@ -159,7 +159,7 @@ export default function QuestionCard({ question, showFullContent = false }: Ques
                   <MessageSquare className="mr-1 h-4 w-4" /> {question.answersCount} answers
                 </span>
                 <span className="flex items-center">
-                  <Eye className="mr-1 h-4 w-4" /> {Math.floor(Math.random() * 500)} views
+                  <Eye className="mr-1 h-4 w-4" /> {question.views || 0} views
                 </span>
               </div>
 

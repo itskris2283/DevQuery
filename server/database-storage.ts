@@ -346,6 +346,26 @@ export class DatabaseStorage implements IStorage {
     return true;
   }
 
+  async incrementQuestionViews(id: number): Promise<boolean> {
+    const [question] = await db
+      .select()
+      .from(questions)
+      .where(eq(questions.id, id));
+    
+    if (!question) return false;
+    
+    // Increment the views count
+    await db
+      .update(questions)
+      .set({ 
+        views: (question.views || 0) + 1, 
+        updatedAt: new Date() 
+      })
+      .where(eq(questions.id, id));
+    
+    return true;
+  }
+
   // Tag operations
   async getTag(id: number): Promise<Tag | undefined> {
     const [tag] = await db

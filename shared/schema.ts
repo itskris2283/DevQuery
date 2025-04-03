@@ -39,6 +39,7 @@ export const questions = pgTable("questions", {
   content: text("content").notNull(),
   imageUrl: text("image_url"),
   solved: boolean("solved").default(false).notNull(),
+  views: integer("views").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -266,6 +267,7 @@ export type QuestionWithUser = Question & {
   tags: Tag[];
   votesCount: number;
   answersCount: number;
+  views: number;
 };
 
 export type AnswerWithUser = Answer & {

@@ -169,7 +169,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: 'Question not found' });
       }
       
-      res.json(question);
+      // Increment the view count
+      await storage.incrementQuestionViews(questionId);
+      
+      // Get the updated question with the new view count
+      const updatedQuestion = await storage.getQuestionWithDetails(questionId);
+      
+      res.json(updatedQuestion || question);
     } catch (error) {
       console.error('Error fetching question:', error);
       res.status(500).json({ message: 'Failed to fetch question' });

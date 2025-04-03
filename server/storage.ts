@@ -35,6 +35,7 @@ export interface IStorage {
   createQuestion(userId: number, question: InsertQuestion, tagNames: string[]): Promise<Question>;
   updateQuestion(id: number, question: Partial<InsertQuestion>): Promise<Question | undefined>;
   markQuestionAsSolved(id: number, answerId: number): Promise<boolean>;
+  incrementQuestionViews(id: number): Promise<boolean>;
   
   // Tag operations
   getTag(id: number): Promise<Tag | undefined>;
@@ -351,6 +352,19 @@ export class MemStorage implements IStorage {
     this.answers.set(answerId, {
       ...answer,
       accepted: true,
+      updatedAt: new Date()
+    });
+    
+    return true;
+  }
+  
+  async incrementQuestionViews(id: number): Promise<boolean> {
+    const question = this.questions.get(id);
+    if (!question) return false;
+    
+    this.questions.set(id, {
+      ...question,
+      views: (question.views || 0) + 1,
       updatedAt: new Date()
     });
     
