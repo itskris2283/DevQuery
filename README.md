@@ -1,6 +1,6 @@
 # DevQuery - Developer Q&A Platform
 
-A modern StackOverflow-type website built using the MERN stack with PostgreSQL database, allowing users to post questions and answers. The platform distinguishes between student and teacher roles during login.
+A modern StackOverflow-type website built using the MERN stack with MySQL database, allowing users to post questions and answers. The platform distinguishes between student and teacher roles during login.
 
 ## Features
 
@@ -19,7 +19,7 @@ A modern StackOverflow-type website built using the MERN stack with PostgreSQL d
 
 1. Node.js (v16 or later)
 2. npm package manager
-3. PostgreSQL (optional - the app can run with in-memory storage for development)
+3. MySQL (optional - the app can run with in-memory storage for development)
 
 ### Setup Steps
 
@@ -46,8 +46,9 @@ copy .env.example .env
 ```
 
 Then edit the `.env` file to add your specific configuration:
-- `DATABASE_URL`: Your PostgreSQL connection string (if using a database)
+- `DATABASE_URL`: Your MySQL connection string (if using a database)
 - `SESSION_SECRET`: A random string for session encryption
+- `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_HOST`: Optional MySQL configuration if not using a full connection string
 
 4. **Start the application**
 
@@ -60,7 +61,7 @@ The application will be available at http://localhost:5000
 ### Notes for Windows Users
 
 - If you encounter EADDRINUSE errors, make sure port 5000 is not in use by another application
-- If you don't have PostgreSQL installed, the application will automatically fall back to in-memory storage for development purposes
+- If you don't have MySQL installed, the application will automatically fall back to in-memory storage for development purposes
 - All file paths in the application use forward slashes (`/`) which are compatible with Windows
 - The application will automatically detect Windows and use appropriate network settings (using 'localhost' instead of '0.0.0.0')
 - If you still encounter binding issues, you can explicitly set `HOST=localhost` in your `.env` file
@@ -73,46 +74,55 @@ The application will be available at http://localhost:5000
 
 ## Database Setup (Optional)
 
-If you want to use PostgreSQL for persistent storage:
+If you want to use MySQL for persistent storage:
 
-1. Install PostgreSQL on your machine (recommended version: 13 or later)
-2. Create a new database: `createdb devquery`
+1. Install MySQL on your machine (recommended version: 8.0 or later)
+2. Create a new database: `CREATE DATABASE devquery;`
 3. Update the `DATABASE_URL` in your `.env` file with the connection string
 
 The application will **automatically create all required tables** when it connects to the database for the first time. No need to run any migration commands manually!
 
-### PostgreSQL Connection on Windows
+### MySQL Connection on Windows
 
-If you're having issues connecting to PostgreSQL on Windows:
+If you're having issues connecting to MySQL on Windows:
 
-1. **Local PostgreSQL setup**:
+1. **Local MySQL setup**:
    ```
    # In your .env file:
-   DATABASE_URL=postgresql://username:password@localhost:5432/devquery
+   DATABASE_URL=mysql://username:password@localhost:3306/devquery
    ```
-   Replace `username` and `password` with your actual PostgreSQL credentials.
+   Replace `username` and `password` with your actual MySQL credentials.
 
-2. **PostgreSQL Authentication**:
-   - Make sure you've created a PostgreSQL user with a password
-   - The default PostgreSQL user on Windows is often your username with no password
-   - To create a new PostgreSQL user with password:
+   Alternatively, you can use individual environment variables:
+   ```
+   MYSQL_USER=root
+   MYSQL_PASSWORD=your_password
+   MYSQL_DATABASE=devquery
+   MYSQL_HOST=localhost
+   ```
+
+2. **MySQL Authentication**:
+   - Make sure you've created a MySQL user with a password
+   - The default MySQL user is 'root', which may or may not have a password depending on your installation
+   - To create a new MySQL user with password:
      ```
-     # In psql or pgAdmin:
-     CREATE USER myuser WITH PASSWORD 'mypassword';
-     GRANT ALL PRIVILEGES ON DATABASE devquery TO myuser;
+     # In MySQL command line or MySQL Workbench:
+     CREATE USER 'myuser'@'localhost' IDENTIFIED BY 'mypassword';
+     GRANT ALL PRIVILEGES ON devquery.* TO 'myuser'@'localhost';
+     FLUSH PRIVILEGES;
      ```
 
 3. **Connection Issues Troubleshooting**:
-   - Check that PostgreSQL service is running (Services app in Windows)
-   - Verify your connection settings in `pg_hba.conf` 
+   - Check that MySQL service is running (Services app in Windows)
+   - Verify that your user has proper access permissions
    - Try using `127.0.0.1` instead of `localhost` in your connection string
-   - If nothing works, you can use Neon Database (cloud PostgreSQL) which works on all platforms
+   - If nothing works, you can use PlanetScale (cloud MySQL) which works on all platforms
 
-4. **Using a cloud database (Neon)** instead of local PostgreSQL:
-   - Sign up for a free account at https://neon.tech
-   - Create a new project and get your connection string
+4. **Using a cloud database (PlanetScale)** instead of local MySQL:
+   - Sign up for a free account at https://planetscale.com
+   - Create a new database and get your connection string
    - Update your `.env` file with the provided connection string
-   - Format should be: `postgres://username:password@endpoint.neon.tech/neondb?sslmode=require`
+   - Format should be: `mysql://username:password@aws.connect.psdb.cloud/mydatabase?sslmode=required`
 
 ## Project Structure
 

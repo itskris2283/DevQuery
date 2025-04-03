@@ -747,11 +747,17 @@ import { db } from './db';
 
 let storage: IStorage;
 
-if (db) {
-  console.log("Using database storage");
-  storage = new DatabaseStorage();
-} else {
-  console.log("Database not available, using in-memory storage");
+try {
+  if (db) {
+    console.log("Using database storage");
+    storage = new DatabaseStorage();
+  } else {
+    console.log("Database not available, using in-memory storage");
+    storage = new MemStorage();
+  }
+} catch (error) {
+  console.error("Error initializing database storage:", error);
+  console.log("Falling back to in-memory storage due to error");
   storage = new MemStorage();
 }
 

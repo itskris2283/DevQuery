@@ -1,17 +1,17 @@
-import { pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
+import { mysqlTable, varchar, int, tinyint, boolean, timestamp, text, serial } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // Users table
-export const users = pgTable("users", {
+export const users = mysqlTable("users", {
   id: serial("id").primaryKey(),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
-  email: text("email").notNull(),
-  role: text("role").notNull().default("student"), // "student" or "teacher"
+  username: varchar("username", { length: 255 }).notNull().unique(),
+  password: varchar("password", { length: 255 }).notNull(),
+  email: varchar("email", { length: 255 }).notNull(),
+  role: varchar("role", { length: 50 }).notNull().default("student"), // "student" or "teacher"
   bio: text("bio"),
-  avatarUrl: text("avatar_url"),
+  avatarUrl: varchar("avatar_url", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -32,14 +32,14 @@ export const usersRelations = relations(users, ({ many }) => ({
 }));
 
 // Questions table
-export const questions = pgTable("questions", {
+export const questions = mysqlTable("questions", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id),
-  title: text("title").notNull(),
+  userId: int("user_id").notNull().references(() => users.id),
+  title: varchar("title", { length: 255 }).notNull(),
   content: text("content").notNull(),
-  imageUrl: text("image_url"),
+  imageUrl: varchar("image_url", { length: 255 }),
   solved: boolean("solved").default(false).notNull(),
-  views: integer("views").default(0).notNull(),
+  views: int("views").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -64,9 +64,9 @@ export const questionsRelations = relations(questions, ({ one, many }) => ({
 }));
 
 // Tags table
-export const tags = pgTable("tags", {
+export const tags = mysqlTable("tags", {
   id: serial("id").primaryKey(),
-  name: text("name").notNull().unique(),
+  name: varchar("name", { length: 255 }).notNull().unique(),
 });
 
 export const insertTagSchema = createInsertSchema(tags).omit({
@@ -79,10 +79,10 @@ export const tagsRelations = relations(tags, ({ many }) => ({
 }));
 
 // Question Tags join table
-export const questionTags = pgTable("question_tags", {
+export const questionTags = mysqlTable("question_tags", {
   id: serial("id").primaryKey(),
-  questionId: integer("question_id").notNull().references(() => questions.id),
-  tagId: integer("tag_id").notNull().references(() => tags.id),
+  questionId: int("question_id").notNull().references(() => questions.id),
+  tagId: int("tag_id").notNull().references(() => tags.id),
 });
 
 export const insertQuestionTagSchema = createInsertSchema(questionTags).omit({
@@ -102,12 +102,12 @@ export const questionTagsRelations = relations(questionTags, ({ one }) => ({
 }));
 
 // Answers table
-export const answers = pgTable("answers", {
+export const answers = mysqlTable("answers", {
   id: serial("id").primaryKey(),
-  questionId: integer("question_id").notNull().references(() => questions.id),
-  userId: integer("user_id").notNull().references(() => users.id),
+  questionId: int("question_id").notNull().references(() => questions.id),
+  userId: int("user_id").notNull().references(() => users.id),
   content: text("content").notNull(),
-  imageUrl: text("image_url"),
+  imageUrl: varchar("image_url", { length: 255 }),
   accepted: boolean("accepted").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -135,12 +135,12 @@ export const answersRelations = relations(answers, ({ one, many }) => ({
 }));
 
 // Votes table - for both questions and answers
-export const votes = pgTable("votes", {
+export const votes = mysqlTable("votes", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id),
-  questionId: integer("question_id").references(() => questions.id),
-  answerId: integer("answer_id").references(() => answers.id),
-  value: integer("value").notNull(), // 1 for upvote, -1 for downvote
+  userId: int("user_id").notNull().references(() => users.id),
+  questionId: int("question_id").references(() => questions.id),
+  answerId: int("answer_id").references(() => answers.id),
+  value: int("value").notNull(), // 1 for upvote, -1 for downvote
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -166,10 +166,10 @@ export const votesRelations = relations(votes, ({ one }) => ({
 }));
 
 // Follows table
-export const follows = pgTable("follows", {
+export const follows = mysqlTable("follows", {
   id: serial("id").primaryKey(),
-  followerId: integer("follower_id").notNull().references(() => users.id),
-  followingId: integer("following_id").notNull().references(() => users.id),
+  followerId: int("follower_id").notNull().references(() => users.id),
+  followingId: int("following_id").notNull().references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -193,10 +193,10 @@ export const followsRelations = relations(follows, ({ one }) => ({
 }));
 
 // Messages table
-export const messages = pgTable("messages", {
+export const messages = mysqlTable("messages", {
   id: serial("id").primaryKey(),
-  senderId: integer("sender_id").notNull().references(() => users.id),
-  receiverId: integer("receiver_id").notNull().references(() => users.id),
+  senderId: int("sender_id").notNull().references(() => users.id),
+  receiverId: int("receiver_id").notNull().references(() => users.id),
   content: text("content").notNull(),
   read: boolean("read").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

@@ -1,8 +1,7 @@
-import { Pool as NeonPool, neonConfig } from '@neondatabase/serverless';
-import { drizzle as drizzleNeon } from 'drizzle-orm/neon-serverless';
-import pg from 'pg';
-import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
-import ws from "ws";
+import mysql from 'mysql2/promise';
+import { drizzle as drizzleMysql } from 'drizzle-orm/mysql2';
+import { connect as planetscaleConnect } from '@planetscale/database';
+import { drizzle as drizzlePlanetscale } from 'drizzle-orm/planetscale-serverless';
 import * as schema from "@shared/schema";
 import dotenv from 'dotenv';
 import path from 'path';
@@ -16,8 +15,6 @@ if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath });
 }
 
-neonConfig.webSocketConstructor = ws;
-
 // Fallback to a demo database URL if not set
 // This enables the app to run in development without needing to set up a database
 if (!process.env.DATABASE_URL) {
@@ -27,8 +24,8 @@ if (!process.env.DATABASE_URL) {
 }
 
 // Try to establish database connection - with better error handling for Windows
-let neonPool: NeonPool | null = null;
-let pgPool: pg.Pool | null = null;
+let mysqlPool: mysql.Pool | null = null;
+let planetscaleConn: any = null;
 let db: any = null;
 
 // Function to automatically create database schema
@@ -38,52 +35,48 @@ async function pushDatabaseSchema() {
     
     // First, check if the tables already exist
     const checkTableExistenceQuery = `
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_schema = 'public' AND table_name = 'users'
-      );
+      SELECT COUNT(*) as count
+      FROM information_schema.tables 
+      WHERE table_schema = DATABASE() AND table_name = 'users';
     `;
     
-    let client;
-    if (neonPool) {
-      client = await neonPool.connect();
-    } else if (pgPool) {
-      client = await pgPool.connect();
+    let tableExists = false;
+    
+    if (mysqlPool) {
+      const [rows] = await mysqlPool.query(checkTableExistenceQuery);
+      const result = rows as any[];
+      tableExists = result[0].count > 0;
+    } else if (planetscaleConn) {
+      const result = await planetscaleConn.execute(checkTableExistenceQuery);
+      tableExists = result.rows[0].count > 0;
     } else {
-      throw new Error("No database pool available");
+      throw new Error("No database connection available");
     }
     
-    try {
-      // Check if the users table exists (as a way to determine if we need to create schema)
-      const tableCheck = await client.query(checkTableExistenceQuery);
+    if (!tableExists) {
+      console.log("Database tables don't exist. Running schema push...");
       
-      if (!tableCheck.rows[0].exists) {
-        console.log("Database tables don't exist. Running schema push...");
-        
-        // Run the npm script
-        return new Promise<void>((resolve, reject) => {
-          exec('npm run db:push', (error: Error | null, stdout: string, stderr: string) => {
-            if (error) {
-              console.error(`Schema push error: ${error.message}`);
-              // Even if there's an error, try to continue
-              resolve();
-              return;
-            }
-            
-            if (stderr) {
-              console.log(`Schema push stderr: ${stderr}`);
-            }
-            
-            console.log(`Schema push output: ${stdout}`);
-            console.log("Database schema has been created successfully");
+      // Run the npm script
+      return new Promise<void>((resolve, reject) => {
+        exec('npm run db:push', (error: Error | null, stdout: string, stderr: string) => {
+          if (error) {
+            console.error(`Schema push error: ${error.message}`);
+            // Even if there's an error, try to continue
             resolve();
-          });
+            return;
+          }
+          
+          if (stderr) {
+            console.log(`Schema push stderr: ${stderr}`);
+          }
+          
+          console.log(`Schema push output: ${stdout}`);
+          console.log("Database schema has been created successfully");
+          resolve();
         });
-      } else {
-        console.log("Database tables already exist");
-      }
-    } finally {
-      client.release();
+      });
+    } else {
+      console.log("Database tables already exist");
     }
   } catch (error: any) {
     console.error("Failed to check/create database schema:", error);
@@ -94,19 +87,21 @@ async function pushDatabaseSchema() {
 if (process.env.DATABASE_URL) {
   try {
     const isWindows = process.platform === 'win32';
-    const isNeonUrl = process.env.DATABASE_URL.includes('neon.tech');
+    const isPlanetscaleUrl = process.env.DATABASE_URL.includes('planetscale');
     
-    // Use different connection approach depending on URL type and platform
-    if (isNeonUrl) {
-      // For Neon database (cloud)
-      console.log("Connecting to Neon cloud database...");
-      neonPool = new NeonPool({ connectionString: process.env.DATABASE_URL });
-      db = drizzleNeon({ client: neonPool, schema });
+    // Use different connection approach depending on URL type
+    if (isPlanetscaleUrl) {
+      // For PlanetScale database (cloud)
+      console.log("Connecting to PlanetScale cloud database...");
+      planetscaleConn = planetscaleConnect({
+        url: process.env.DATABASE_URL
+      });
+      db = drizzlePlanetscale({ client: planetscaleConn, schema, mode: 'default' });
     } else {
-      // For local PostgreSQL instance
-      console.log("Connecting to local PostgreSQL database...");
-      pgPool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-      db = drizzlePg(pgPool, { schema });
+      // For local MySQL instance
+      console.log("Connecting to local MySQL database...");
+      mysqlPool = mysql.createPool(process.env.DATABASE_URL);
+      db = drizzleMysql(mysqlPool, { schema, mode: 'default' });
     }
     
     console.log("Database connection established successfully");
@@ -119,12 +114,12 @@ if (process.env.DATABASE_URL) {
   } catch (error: any) {
     console.error("Failed to connect to database:", error);
     console.warn("Falling back to in-memory storage");
-    neonPool = null;
-    pgPool = null;
+    mysqlPool = null;
+    planetscaleConn = null;
     db = null;
   }
 }
 
 // Export a pool variable for backward compatibility
-const pool = neonPool || pgPool;
+const pool = mysqlPool || planetscaleConn;
 export { pool, db };

@@ -11,8 +11,8 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import session from "express-session";
-import connectPg from "connect-pg-simple";
 import { pool } from "./db";
+import ConnectMysql from "connect-mysql";
 import { 
   eq, and, or, desc, asc, sql, like, 
   isNull, isNotNull, gt, lt 
@@ -20,9 +20,9 @@ import {
 import { IStorage } from "./storage";
 import createMemoryStore from "memorystore";
 
-// Create PostgreSQL session store if available, otherwise fallback to memory store
+// Create MySQL session store if available, otherwise fallback to memory store
 const MemoryStore = createMemoryStore(session);
-const PostgresSessionStore = connectPg(session);
+const MySQLStore = ConnectMysql(session);
 
 export class DatabaseStorage implements IStorage {
   sessionStore: session.Store;
@@ -30,39 +30,82 @@ export class DatabaseStorage implements IStorage {
   constructor() {
     const isWindows = process.platform === 'win32';
     
+    // Fallback to memory store by default
+    this.sessionStore = new MemoryStore({
+      checkPeriod: 86400000 // 24 hours
+    });
+    
+    // Only try to create MySQL session store if pool exists
     if (pool) {
       try {
-        // Try to create PostgreSQL session store with proper error handling
-        console.log("Creating PostgreSQL session store...");
+        // Try to create MySQL session store with proper error handling
+        console.log("Creating MySQL session store...");
         
-        // Create session table options with better compatibility for different Postgres drivers
-        const sessionOptions = { 
-          pool: pool, 
-          createTableIfMissing: true,
-          tableName: 'session', // Explicitly naming the table for compatibility
-          errorLog: console.error, // Log store errors
-          // Avoid pruning on Windows to prevent potential issues
-          disableTouch: isWindows, 
-          // Shorter timeout to prevent locking issues on Windows
-          ttl: isWindows ? 3600 : 86400 
+        // Use direct environment variables if available, otherwise parse from DATABASE_URL
+        let dbConfig: any = { 
+          user: process.env.MYSQL_USER || 'root',
+          password: process.env.MYSQL_PASSWORD || '',
+          database: process.env.MYSQL_DATABASE || '',
+          host: process.env.MYSQL_HOST || (isWindows ? 'localhost' : '127.0.0.1'),
+          // Connection options optimized for Windows compatibility
+          connectionLimit: isWindows ? 5 : 10,
+          connectTimeout: isWindows ? 20000 : 10000,
+          // Auto-reconnect if connection lost
+          waitForConnections: true,
+          queueLimit: 0
         };
         
-        this.sessionStore = new PostgresSessionStore(sessionOptions);
-        console.log("PostgreSQL session store created successfully");
+        // Check if we're in a CI/test environment (like Replit)
+        const isCI = process.env.CI === 'true' || process.env.REPL_ID;
+        if (isCI) {
+          console.log("Running in CI/Replit environment, using appropriate database settings");
+          // In Replit, we need to avoid specific connection options
+          dbConfig = {
+            user: process.env.MYSQL_USER || 'root',
+            password: process.env.MYSQL_PASSWORD || '',
+            database: process.env.MYSQL_DATABASE || '',
+            host: '127.0.0.1',
+            // Simplified connection options for CI
+            connectionLimit: 2,
+            connectTimeout: 5000,
+            waitForConnections: true
+          };
+        }
+        
+        // Session store options
+        const sessionOptions = { 
+          config: dbConfig,
+          // Session table name
+          table: 'sessions',
+          // Shorter TTL on Windows to prevent potential issues
+          ttl: isWindows ? 3600 : 86400
+        };
+        
+        // In Replit environment, don't even try to connect to MySQL for session store
+        // This is a workaround for the Replit environment where MySQL might not be available
+        if (process.env.REPL_ID) {
+          console.log("Replit environment detected, using memory session store for reliability");
+          // Keep using the memory store that's already assigned
+        } else {
+          // Warning: This is a potentially dangerous operation that could throw an error
+          // if MySQL server is not available. We're now prepared to catch this error.
+          // The memory store fallback is already assigned above.
+          try {
+            this.sessionStore = new MySQLStore(sessionOptions);
+            console.log("MySQL session store created successfully");
+          } catch (error) {
+            console.error("Failed to create MySQL session store:", error);
+            console.warn("Using memory session store instead");
+            // Keep using memory store that's already assigned
+          }
+        }
       } catch (error) {
-        // If PostgreSQL session store creation fails, fall back to memory store
-        console.error("Failed to create PostgreSQL session store:", error);
-        console.warn("Falling back to memory session store");
-        this.sessionStore = new MemoryStore({
-          checkPeriod: 86400000 // 24 hours
-        });
+        // Keep using the already assigned memory store
+        console.error("Failed to create MySQL session store:", error);
+        console.warn("Using memory session store instead");
       }
     } else {
-      // No database connection available, use memory store
       console.log("No database connection, using memory session store");
-      this.sessionStore = new MemoryStore({
-        checkPeriod: 86400000 // 24 hours
-      });
     }
   }
 
