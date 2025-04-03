@@ -79,6 +79,8 @@ If you want to use PostgreSQL for persistent storage:
 2. Create a new database: `createdb devquery`
 3. Update the `DATABASE_URL` in your `.env` file with the connection string
 
+The application will **automatically create all required tables** when it connects to the database for the first time. No need to run any migration commands manually!
+
 ### PostgreSQL Connection on Windows
 
 If you're having issues connecting to PostgreSQL on Windows:

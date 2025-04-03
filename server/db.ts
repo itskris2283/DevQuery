@@ -1,4 +1,4 @@
-import { Pool, neonConfig } from '@neondatabase/serverless';
+import { Pool as NeonPool, neonConfig } from '@neondatabase/serverless';
 import { drizzle as drizzleNeon } from 'drizzle-orm/neon-serverless';
 import pg from 'pg';
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
@@ -7,6 +7,7 @@ import * as schema from "@shared/schema";
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
+import { exec } from 'child_process';
 
 // Load environment variables from .env file if present
 const envPath = path.join(process.cwd(), '.env');
@@ -26,8 +27,69 @@ if (!process.env.DATABASE_URL) {
 }
 
 // Try to establish database connection - with better error handling for Windows
-let pool = null;
-let db = null;
+let neonPool: NeonPool | null = null;
+let pgPool: pg.Pool | null = null;
+let db: any = null;
+
+// Function to automatically create database schema
+async function pushDatabaseSchema() {
+  try {
+    console.log("Checking database tables and creating them if needed...");
+    
+    // First, check if the tables already exist
+    const checkTableExistenceQuery = `
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_schema = 'public' AND table_name = 'users'
+      );
+    `;
+    
+    let client;
+    if (neonPool) {
+      client = await neonPool.connect();
+    } else if (pgPool) {
+      client = await pgPool.connect();
+    } else {
+      throw new Error("No database pool available");
+    }
+    
+    try {
+      // Check if the users table exists (as a way to determine if we need to create schema)
+      const tableCheck = await client.query(checkTableExistenceQuery);
+      
+      if (!tableCheck.rows[0].exists) {
+        console.log("Database tables don't exist. Running schema push...");
+        
+        // Run the npm script
+        return new Promise<void>((resolve, reject) => {
+          exec('npm run db:push', (error: Error | null, stdout: string, stderr: string) => {
+            if (error) {
+              console.error(`Schema push error: ${error.message}`);
+              // Even if there's an error, try to continue
+              resolve();
+              return;
+            }
+            
+            if (stderr) {
+              console.log(`Schema push stderr: ${stderr}`);
+            }
+            
+            console.log(`Schema push output: ${stdout}`);
+            console.log("Database schema has been created successfully");
+            resolve();
+          });
+        });
+      } else {
+        console.log("Database tables already exist");
+      }
+    } finally {
+      client.release();
+    }
+  } catch (error: any) {
+    console.error("Failed to check/create database schema:", error);
+    console.warn("Tables may need to be created manually using 'npm run db:push'");
+  }
+}
 
 if (process.env.DATABASE_URL) {
   try {
@@ -38,22 +100,31 @@ if (process.env.DATABASE_URL) {
     if (isNeonUrl) {
       // For Neon database (cloud)
       console.log("Connecting to Neon cloud database...");
-      pool = new Pool({ connectionString: process.env.DATABASE_URL });
-      db = drizzleNeon({ client: pool, schema });
+      neonPool = new NeonPool({ connectionString: process.env.DATABASE_URL });
+      db = drizzleNeon({ client: neonPool, schema });
     } else {
       // For local PostgreSQL instance
       console.log("Connecting to local PostgreSQL database...");
-      pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-      db = drizzlePg(pool, { schema });
+      pgPool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+      db = drizzlePg(pgPool, { schema });
     }
     
     console.log("Database connection established successfully");
-  } catch (error) {
+    
+    // Run schema push after connection is established
+    pushDatabaseSchema().catch(err => {
+      console.error("Error during db schema push:", err);
+    });
+    
+  } catch (error: any) {
     console.error("Failed to connect to database:", error);
     console.warn("Falling back to in-memory storage");
-    pool = null;
+    neonPool = null;
+    pgPool = null;
     db = null;
   }
 }
 
+// Export a pool variable for backward compatibility
+const pool = neonPool || pgPool;
 export { pool, db };
