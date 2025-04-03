@@ -62,11 +62,13 @@ The application will be available at http://localhost:5000
 - If you encounter EADDRINUSE errors, make sure port 5000 is not in use by another application
 - If you don't have PostgreSQL installed, the application will automatically fall back to in-memory storage for development purposes
 - All file paths in the application use forward slashes (`/`) which are compatible with Windows
+- The application will automatically detect Windows and use appropriate network settings (using 'localhost' instead of '0.0.0.0')
 - For production deployment on Windows, use the following command instead of `npm start`:
   ```
   set NODE_ENV=production && node dist/index.js
   ```
 - When setting environment variables in Windows, use `set VARIABLE=value` syntax
+- If you need to use a different port, you can set the `PORT` environment variable in your `.env` file
 
 ## Database Setup (Optional)
 

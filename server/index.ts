@@ -59,12 +59,20 @@ app.use((req, res, next) => {
   // ALWAYS serve the app on port 5000
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  const port = 5000;
-  server.listen({
+  const port = process.env.PORT ? parseInt(process.env.PORT) : 5000;
+  const isWindows = process.platform === 'win32';
+  
+  // Use 'localhost' instead of '0.0.0.0' on Windows to avoid ENOTSUP error
+  const host = isWindows ? 'localhost' : '0.0.0.0';
+  
+  const listenOptions = {
     port,
-    host: "0.0.0.0",
-    reusePort: true,
-  }, () => {
-    log(`serving on port ${port}`);
+    host,
+    // reusePort is not supported on Windows and will cause errors
+    ...(isWindows ? {} : { reusePort: true })
+  };
+  
+  server.listen(listenOptions, () => {
+    log(`serving on ${host}:${port}`);
   });
 })();
