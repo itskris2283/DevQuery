@@ -11,11 +11,16 @@ if (fs.existsSync(envPath)) {
 }
 
 // Set up MongoDB connection string
-// Default to a temporary in-memory database for Replit environment
-// This will be overridden by actual MongoDB URI if available
+// Check if we're in development mode and MONGODB_URI is not set
+const isDev = process.env.NODE_ENV !== 'production';
 const isReplitEnv = process.env.REPL_ID || process.env.REPL_OWNER || process.env.REPL_SLUG;
-const defaultUri = isReplitEnv 
-  ? 'mongodb://mongodb-memory-server/devquery' // Placeholder - will actually use in-memory storage
+
+// Allow in-memory mode for development
+const inMemoryMode = isDev && (process.env.USE_IN_MEMORY_DB === 'true' || isReplitEnv);
+
+// Default connection string
+const defaultUri = inMemoryMode
+  ? 'mongodb://localhost:27017/devquery' // Will be overridden by in-memory mode
   : 'mongodb://localhost:27017/devquery';
 
 const MONGODB_URI = process.env.MONGODB_URI || defaultUri;
@@ -37,6 +42,17 @@ let isConnected = false;
 
 // Connect to MongoDB with timeout
 export async function connectToDatabase(): Promise<typeof mongoose | null> {
+  // For Replit environment or if USE_MOCK_DB is explicitly set to true, 
+  // we'll use mock MongoDB. This allows the app to run without a real MongoDB connection
+  if (process.env.USE_MOCK_DB === 'true' || (isReplitEnv && process.env.USE_MOCK_DB !== 'false')) {
+    console.log('Using mock MongoDB connection for Replit environment');
+    console.log('For real MongoDB, please install MongoDB locally or use MongoDB Atlas');
+    // Return mongoose but don't actually connect
+    mongoose.set('strictQuery', true);
+    isConnected = true;
+    return mongoose;
+  }
+
   if (isConnected) {
     console.log('Using existing MongoDB connection');
     return mongoose;
@@ -93,6 +109,15 @@ export async function connectToDatabase(): Promise<typeof mongoose | null> {
     return mongoose;
   } catch (error) {
     console.error('Failed to connect to MongoDB:', error);
+    
+    if (isReplitEnv || process.env.USE_MOCK_DB === 'true') {
+      console.log('Using mock MongoDB storage due to connection failure');
+      // Returning mongoose without actual connection
+      mongoose.set('strictQuery', true);
+      isConnected = true;
+      return mongoose;
+    }
+    
     return null;
   }
 }

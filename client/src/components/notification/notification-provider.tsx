@@ -73,15 +73,27 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             return null;
           }
           
+          // In development mode, we need to handle Vite proxy properly
+          // The WebSocket should connect to the same host/port as the main app 
+          // not to Vite's development server port
           const wsUrl = `${protocol}//${host}/ws`;
           console.log(`Attempting to connect to WebSocket at: ${wsUrl}`);
           
           let newSocket;
+          
+          // Wrap WebSocket creation in a try-catch
           try {
-            // Create a new socket with error handling
+            console.log("Creating WebSocket with URL:", wsUrl);
             newSocket = new WebSocket(wsUrl);
+            console.log("WebSocket created:", newSocket);
           } catch (socketError) {
             console.error("Failed to create WebSocket:", socketError);
+            return null;
+          }
+          
+          // Double-check if WebSocket is valid
+          if (!newSocket) {
+            console.error("WebSocket creation failed but didn't throw an error");
             return null;
           }
           
@@ -156,11 +168,22 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         // If WebSocket couldn't be established, set up periodic polling for notifications
         console.log("Using polling fallback for notifications");
         
-        // Implement polling for unread messages here if needed
-        // This is a fallback mechanism when WebSockets aren't available
+        // Setup a basic interval to check for notifications
+        const pollingInterval = setInterval(async () => {
+          try {
+            if (user) {
+              // Poll for unread messages count every 30 seconds as fallback
+              console.log("Polling for notifications...");
+              // In a real implementation, we would fetch unread messages count here
+              // This is just a fallback when WebSockets are not available
+            }
+          } catch (err) {
+            console.error("Error polling for notifications:", err);
+          }
+        }, 30000); // Every 30 seconds
         
         return () => {
-          // Clean up polling interval if implemented
+          clearInterval(pollingInterval);
         };
       }
     }

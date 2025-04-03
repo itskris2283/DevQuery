@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { setupAuth } from "./auth";
 import { connectToDatabase } from "./mongo-db";
+import { messageEvents } from "./models/message.model";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -51,14 +52,29 @@ const upload = multer({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  const isReplitEnv = process.env.REPL_ID || process.env.REPL_OWNER || process.env.REPL_SLUG;
+  
   try {
     // Initialize MongoDB connection
-    await connectToDatabase();
-    console.log('MongoDB connected successfully');
+    const mongooseInstance = await connectToDatabase();
+    
+    if (mongooseInstance) {
+      console.log('MongoDB connected successfully');
+    } else {
+      if (isReplitEnv) {
+        console.log('Using mock data for Replit environment');
+      } else {
+        throw new Error('MongoDB connection required for production environment');
+      }
+    }
   } catch (error) {
     console.error('Failed to connect to MongoDB:', error);
-    // Continue regardless of MongoDB connection status
-    // to allow for fallback to other storage methods
+    
+    if (!isReplitEnv) {
+      throw new Error('MongoDB connection required for production environment');
+    } else {
+      console.log('Continuing with mock data for Replit environment');
+    }
   }
 
   // Set up authentication routes
@@ -78,6 +94,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Map to keep track of connected clients by user ID
   const connectedClients = new Map<number, WebSocket[]>();
   
+  // Listen for message events from MongoDB
+  messageEvents.on('new_message', async (messageData: any) => {
+    // Notify the recipient via WebSocket if they're connected
+    const receiverId = messageData.receiverId;
+    
+    if (connectedClients.has(receiverId)) {
+      const recipientConnections = connectedClients.get(receiverId);
+      if (recipientConnections && recipientConnections.length > 0) {
+        console.log(`Sending message event notification to user ${receiverId}`);
+        
+        try {
+          // Get sender info to include in notification
+          const sender = await storage.getUser(messageData.senderId);
+          if (sender) {
+            const { password, ...senderWithoutPassword } = sender;
+            
+            // Send to all connections for this user
+            recipientConnections.forEach(ws => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'new_message',
+                  message: {
+                    ...messageData,
+                    sender: senderWithoutPassword
+                  }
+                }));
+              }
+            });
+          }
+        } catch (error) {
+          console.error('Error sending WebSocket message event:', error);
+        }
+      }
+    }
+  });
+  
   // Function to broadcast online users to all clients
   const broadcastOnlineUsers = () => {
     const onlineUserIds = Array.from(connectedClients.keys());
@@ -95,17 +147,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   };
 
-  // Set up WebSocket connection for chat
+  // Set up WebSocket connection for chat with robust error handling
   wss.on('connection', (ws, req) => {
     console.log('WebSocket client connected');
     let userId: number | null = null;
+    let pingInterval: NodeJS.Timeout | null = null;
+    let connectionAlive = true;
     
-    // Send initial connection confirmation
-    ws.send(JSON.stringify({ type: 'connection', message: 'Connected to DevQuery chat' }));
+    // Enhance WebSocket with ping/pong for better connection management
+    ws.on('pong', () => {
+      connectionAlive = true;
+    });
+    
+    // Set up ping interval to detect dead connections
+    pingInterval = setInterval(() => {
+      if (!connectionAlive) {
+        console.log('WebSocket connection not responding - terminating');
+        ws.terminate();
+        return;
+      }
+      
+      connectionAlive = false;
+      try {
+        ws.ping();
+      } catch (err) {
+        console.error('Error sending ping:', err);
+        ws.terminate();
+      }
+    }, 30000); // Every 30 seconds
+    
+    // Send initial connection confirmation (with better error handling)
+    try {
+      ws.send(JSON.stringify({ type: 'connection', message: 'Connected to DevQuery chat' }));
+    } catch (err) {
+      console.error('Error sending initial connection message:', err);
+    }
 
     ws.on('message', async (data) => {
       try {
-        const message = JSON.parse(data.toString());
+        let message;
+        try {
+          message = JSON.parse(data.toString());
+        } catch (parseError) {
+          console.error('Invalid WebSocket message format:', data.toString());
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: 'Invalid message format'
+          }));
+          return;
+        }
         
         // Register client with a user ID
         if (message.type === 'register') {
@@ -120,20 +210,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
             connectedClients.get(userId)?.push(ws);
             
             // Confirm registration
+            try {
+              ws.send(JSON.stringify({
+                type: 'registered',
+                userId
+              }));
+              
+              // Send current online users to the newly connected client
+              const onlineUserIds = Array.from(connectedClients.keys());
+              ws.send(JSON.stringify({
+                type: 'online_users',
+                userIds: onlineUserIds
+              }));
+              
+              // Broadcast updated online users list to all clients
+              broadcastOnlineUsers();
+            } catch (sendError) {
+              console.error('Error sending registration confirmation:', sendError);
+            }
+          } else {
             ws.send(JSON.stringify({
-              type: 'registered',
-              userId
+              type: 'error',
+              message: 'Invalid user ID'
             }));
-            
-            // Send current online users to the newly connected client
-            const onlineUserIds = Array.from(connectedClients.keys());
-            ws.send(JSON.stringify({
-              type: 'online_users',
-              userIds: onlineUserIds
-            }));
-            
-            // Broadcast updated online users list to all clients
-            broadcastOnlineUsers();
           }
         }
         // We don't implement message sending via WebSocket anymore
@@ -141,10 +240,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
       } catch (error) {
         console.error('Error processing WebSocket message:', error);
-        ws.send(JSON.stringify({
-          type: 'error',
-          message: 'Error processing message'
-        }));
+        try {
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: 'Error processing message'
+          }));
+        } catch (sendError) {
+          console.error('Error sending error message:', sendError);
+        }
       }
     });
 
@@ -696,34 +799,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         content: req.body.content
       });
       
+      // Create message - MongoDB event hooks will handle notification
       const message = await storage.createMessage(validatedData);
       
-      // Notify recipient via WebSocket if they are connected
-      if (connectedClients.has(validatedData.receiverId)) {
-        const recipientConnections = connectedClients.get(validatedData.receiverId);
-        if (recipientConnections && recipientConnections.length > 0) {
-          console.log(`Sending message notification to user ${validatedData.receiverId}`);
-          
-          // Get sender info to include in notification
-          const sender = await storage.getUser(req.user.id);
-          if (sender) {
-            const { password, ...senderWithoutPassword } = sender;
-            
-            // Send to all connections for this user (in case they have multiple tabs/devices)
-            recipientConnections.forEach(ws => {
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'new_message',
-                  message: {
-                    ...message,
-                    sender: senderWithoutPassword
-                  }
-                }));
-              }
-            });
-          }
-        }
-      }
+      // The event listener we set up earlier will handle WebSocket notifications
+      // when messageEvents.emit('new_message') is triggered by the message model
       
       res.status(201).json(message);
     } catch (error) {
