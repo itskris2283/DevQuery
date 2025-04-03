@@ -8,12 +8,13 @@ export interface ITag extends Document {
 
 // Schema for MongoDB
 const tagSchema = new Schema<ITag>({
-  id: { type: Number, required: true, unique: true },
-  name: { type: String, required: true, unique: true }
+  id: { type: Number, required: true },
+  name: { type: String, required: true }
 });
 
 // Index for faster queries
-tagSchema.index({ name: 1 });
+tagSchema.index({ id: 1 }, { unique: true });
+tagSchema.index({ name: 1 }, { unique: true });
 
 // Counter for auto-increment ID
 let tagCounter = 1;

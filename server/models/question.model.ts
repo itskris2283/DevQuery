@@ -15,7 +15,7 @@ export interface IQuestion extends Document {
 
 // Schema for MongoDB
 const questionSchema = new Schema<IQuestion>({
-  id: { type: Number, required: true, unique: true },
+  id: { type: Number, required: true },
   userId: { type: Number, required: true, ref: 'User' },
   title: { type: String, required: true },
   content: { type: String, required: true },
@@ -27,6 +27,7 @@ const questionSchema = new Schema<IQuestion>({
 });
 
 // Index for faster queries
+questionSchema.index({ id: 1 }, { unique: true });
 questionSchema.index({ userId: 1 });
 questionSchema.index({ solved: 1 });
 questionSchema.index({ createdAt: -1 });

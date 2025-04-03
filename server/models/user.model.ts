@@ -16,9 +16,9 @@ export interface IUser extends Document {
 
 // Schema for MongoDB
 const userSchema = new Schema<IUser>({
-  id: { type: Number, required: true, unique: true },
-  username: { type: String, required: true, unique: true },
-  email: { type: String, required: true, unique: true },
+  id: { type: Number, required: true },
+  username: { type: String, required: true },
+  email: { type: String, required: true },
   password: { type: String, required: true },
   fullName: { type: String, required: true },
   bio: { type: String, default: null },
@@ -28,7 +28,7 @@ const userSchema = new Schema<IUser>({
   updatedAt: { type: Date, default: Date.now }
 });
 
-// Optimize indexes for faster queries
+// Optimize indexes for faster queries - use only one method to define indexes
 userSchema.index({ username: 1 }, { unique: true });
 userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ role: 1 });

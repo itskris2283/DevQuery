@@ -14,7 +14,7 @@ export interface IAnswer extends Document {
 
 // Schema for MongoDB
 const answerSchema = new Schema<IAnswer>({
-  id: { type: Number, required: true, unique: true },
+  id: { type: Number, required: true },
   userId: { type: Number, required: true, ref: 'User' },
   questionId: { type: Number, required: true, ref: 'Question' },
   content: { type: String, required: true },
@@ -25,6 +25,7 @@ const answerSchema = new Schema<IAnswer>({
 });
 
 // Indexes for faster queries
+answerSchema.index({ id: 1 }, { unique: true });
 answerSchema.index({ userId: 1 });
 answerSchema.index({ questionId: 1 });
 answerSchema.index({ accepted: 1 });
