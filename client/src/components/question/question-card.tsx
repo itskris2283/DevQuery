@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { formatDistanceToNow } from "date-fns";
-import { ArrowBigUp, ArrowBigDown, MessageSquare, Eye } from "lucide-react";
+import { ArrowBigUp, ArrowBigDown, MessageSquare, Eye, MoreVertical, Edit, Trash2 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,6 +12,22 @@ import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type QuestionCardProps = {
   question: QuestionWithUser;
@@ -21,8 +37,10 @@ type QuestionCardProps = {
 export default function QuestionCard({ question, showFullContent = false }: QuestionCardProps) {
   const { toast } = useToast();
   const { user } = useAuth();
+  const [location, setLocation] = useLocation();
   const [isUpvoting, setIsUpvoting] = useState(false);
   const [isDownvoting, setIsDownvoting] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   // Vote mutation
   const voteMutation = useMutation({
@@ -41,6 +59,32 @@ export default function QuestionCard({ question, showFullContent = false }: Ques
       toast({
         title: "Error",
         description: `Failed to vote: ${error.message}`,
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Delete question mutation
+  const deleteQuestionMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", `/api/questions/${question.id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/questions'] });
+      toast({
+        title: "Success",
+        description: "Question deleted successfully",
+      });
+      // Redirect to questions page if on the deleted question's page
+      if (location === `/questions/${question.id}`) {
+        setLocation('/questions');
+      }
+    },
+    onError: (error) => {
+      toast({
+        title: "Error",
+        description: `Failed to delete question: ${error.message}`,
         variant: "destructive",
       });
     },
@@ -72,6 +116,22 @@ export default function QuestionCard({ question, showFullContent = false }: Ques
       }
     );
   };
+
+  const handleEdit = () => {
+    setLocation(`/questions/edit/${question.id}`);
+  };
+
+  const handleDelete = () => {
+    setShowDeleteDialog(true);
+  };
+
+  const confirmDelete = () => {
+    deleteQuestionMutation.mutate();
+    setShowDeleteDialog(false);
+  };
+
+  // Check if current user is the author of the question
+  const isAuthor = user && user.id === question.user.id;
 
   return (
     <Card className="mb-4">
@@ -116,7 +176,7 @@ export default function QuestionCard({ question, showFullContent = false }: Ques
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               {question.solved && (
-                <Badge variant="success" className="px-1.5 py-0.5 text-xs">
+                <Badge variant="secondary" className="px-1.5 py-0.5 text-xs bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100">
                   Solved
                 </Badge>
               )}
@@ -125,6 +185,33 @@ export default function QuestionCard({ question, showFullContent = false }: Ques
                   {question.title}
                 </a>
               </Link>
+              
+              {/* Add 3-dot menu dropdown for question owner */}
+              {isAuthor && (
+                <div className="ml-auto">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <MoreVertical className="h-4 w-4" />
+                        <span className="sr-only">More options</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={handleEdit}>
+                        <Edit className="mr-2 h-4 w-4" />
+                        Edit question
+                      </DropdownMenuItem>
+                      <DropdownMenuItem 
+                        onClick={handleDelete}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete question
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              )}
             </div>
 
             <p className={cn("text-muted-foreground mb-3", {
@@ -188,6 +275,28 @@ export default function QuestionCard({ question, showFullContent = false }: Ques
           </div>
         </div>
       </CardContent>
+
+      {/* Delete confirmation dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete your question and all its answers.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={confirmDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

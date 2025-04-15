@@ -6,6 +6,7 @@ import { User } from "@shared/schema";
 // Define the message type for WebSocket
 type WebSocketMessage = {
   type: string;
+  content?: string;
   message?: {
     id: number;
     senderId: number;
@@ -17,6 +18,8 @@ type WebSocketMessage = {
   };
   userIds?: number[];
   userId?: number;
+  senderId?: number;
+  timestamp?: number; // Add timestamp for pong messages
 };
 
 type NotificationContextType = {
@@ -73,9 +76,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             return null;
           }
           
-          // In development mode, we need to handle Vite proxy properly
-          // The WebSocket should connect to the same host/port as the main app 
-          // not to Vite's development server port
+          // Use a more specific path to avoid conflict with Vite's WebSocket
           const wsUrl = `${protocol}//${host}/ws`;
           console.log(`Attempting to connect to WebSocket at: ${wsUrl}`);
           
@@ -84,7 +85,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           // Wrap WebSocket creation in a try-catch
           try {
             console.log("Creating WebSocket with URL:", wsUrl);
+            
+            // Create WebSocket without custom options
             newSocket = new WebSocket(wsUrl);
+            
             console.log("WebSocket created:", newSocket);
           } catch (socketError) {
             console.error("Failed to create WebSocket:", socketError);
@@ -100,14 +104,21 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           // Handle connection error immediately
           newSocket.onerror = (event) => {
             console.error("WebSocket connection error:", event);
+            // Don't crash on error, switch to polling
+            setSocket(null);
           };
           
           // Add a timeout to handle connection issues
           const connectionTimeout = setTimeout(() => {
             if (newSocket.readyState !== WebSocket.OPEN) {
               console.log('WebSocket connection timed out, using polling fallback');
-              newSocket.close();
+              try {
+                newSocket.close();
+              } catch (err) {
+                console.error("Error closing timed out socket:", err);
+              }
               // Continue without WebSocket - we'll use polling for notifications
+              setSocket(null);
             }
           }, 5000); // 5 second timeout
           
@@ -115,6 +126,20 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           newSocket.onopen = () => {
             clearTimeout(connectionTimeout);
             console.log('WebSocket connection established');
+            
+            // Send user registration after successful connection
+            if (user) {
+              try {
+                newSocket.send(JSON.stringify({
+                  type: 'register',
+                  userId: user.id
+                }));
+                console.log("Sent user registration");
+              } catch (err) {
+                console.error("Error sending registration message:", err);
+              }
+            }
+            
             setSocket(newSocket);
           };
           
@@ -130,27 +155,87 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         // Handle socket events
         newSocket.onmessage = (event) => {
           try {
-            const data = JSON.parse(event.data) as WebSocketMessage;
+            // Log raw message for debugging
+            console.log('WebSocket message received:', event.data);
             
-            if (data.type === "new_message" && data.message) {
-              // Show notification toast
-              toast({
-                title: `New message from ${data.message.sender?.username || "User"}`,
-                description: data.message.content.length > 50 
-                  ? data.message.content.substring(0, 50) + "..." 
-                  : data.message.content,
-                duration: 5000,
-              });
-              
-              // Increment unread count
-              incrementUnreadCount();
-            }
-            else if (data.type === "online_users" && data.userIds) {
-              // Update online users list
-              setOnlineUserIds(data.userIds);
+            // Parse the message
+            const message = JSON.parse(event.data) as WebSocketMessage;
+            console.log('Parsed WebSocket message:', message);
+            
+            // Handle different message types
+            switch (message.type) {
+              case 'connection-confirmed':
+                console.log('Connection confirmed:', message.content);
+                break;
+                
+              case 'register':
+                console.log('Registration confirmed:', message.content);
+                break;
+                
+              case 'message':
+                // Handle a new chat message
+                if (message.senderId && message.content) {
+                  console.log('New message received:', message);
+                  
+                  // Don't show notifications for messages from self
+                  if (message.senderId !== user?.id) {
+                    // Update the unread count for this sender
+                    setUnreadCount((prev) => prev + 1);
+                    
+                    // Show toast notification
+                    toast({
+                      title: "New message",
+                      description: `You have a new message from ${message.message?.sender?.username || 'a user'}`,
+                    });
+                  }
+                }
+                break;
+                
+              case 'mark-read':
+                // Handle message read confirmation
+                console.log('Message marked as read:', message);
+                break;
+                
+              case 'online-users':
+                // Update the list of online users
+                if (message.userIds) {
+                  setOnlineUserIds(message.userIds);
+                }
+                break;
+                
+              case 'pong':
+                // Handle pong response from server (keep-alive acknowledgment)
+                console.log('Received pong from server:', message.timestamp);
+                break;
+                
+              case 'notification':
+                // Handle other notifications (e.g., question updates, etc.)
+                if (message.content) {
+                  toast({
+                    title: "Notification",
+                    description: message.content,
+                  });
+                }
+                break;
+                
+              case 'error':
+                // Handle server error message
+                console.error('Server WebSocket error:', message.content);
+                toast({
+                  variant: "destructive",
+                  title: "Connection Error",
+                  description: message.content || "Something went wrong with the connection",
+                });
+                break;
+                
+              default:
+                // Log unknown message types for debugging
+                if (message.content) {
+                  console.log('Unknown message type:', message.type, message.content);
+                }
             }
           } catch (err) {
-            console.error("Error parsing WebSocket message:", err);
+            console.error('Error handling WebSocket message:', err, event.data);
           }
         };
 
@@ -188,6 +273,23 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       }
     }
   }, [user, toast]);
+
+  // Add ping interval to keep connection alive
+  useEffect(() => {
+    if (!socket) return;
+    
+    const pingInterval = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+          type: "ping"
+        }));
+      }
+    }, 30000); // Every 30 seconds
+    
+    return () => {
+      clearInterval(pingInterval);
+    };
+  }, [socket]);
 
   return (
     <NotificationContext.Provider

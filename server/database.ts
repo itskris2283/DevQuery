@@ -386,6 +386,35 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  async deleteQuestion(id: number): Promise<boolean> {
+    try {
+      if (isMockMode()) {
+        // Handle mock mode - would typically use a safe function like other methods
+        // For simplicity, we'll just return true in mock mode
+        console.log(`Mock mode: Simulating deletion of question ${id}`);
+        return true;
+      }
+
+      // Delete related data first to maintain referential integrity
+      // 1. Delete all answers for this question
+      await AnswerModel.deleteMany({ questionId: id });
+      
+      // 2. Delete all votes for this question
+      await VoteModel.deleteMany({ questionId: id });
+      
+      // 3. Delete all question-tag relationships
+      await QuestionTagModel.deleteMany({ questionId: id });
+      
+      // 4. Finally delete the question itself
+      const result = await QuestionModel.deleteOne({ id });
+      
+      return result.deletedCount > 0;
+    } catch (error) {
+      console.error('Error deleting question:', error);
+      return false;
+    }
+  }
+
   async markQuestionAsSolved(id: number, answerId: number): Promise<boolean> {
     try {
       // Mark the question as solved
@@ -621,6 +650,27 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error updating answer:', error);
       return undefined;
+    }
+  }
+
+  async deleteAnswer(id: number): Promise<boolean> {
+    try {
+      if (isMockMode()) {
+        // Handle mock mode
+        console.log(`Mock mode: Simulating deletion of answer ${id}`);
+        return true;
+      }
+
+      // Delete related votes for this answer
+      await VoteModel.deleteMany({ answerId: id });
+      
+      // Delete the answer itself
+      const result = await AnswerModel.deleteOne({ id });
+      
+      return result.deletedCount > 0;
+    } catch (error) {
+      console.error('Error deleting answer:', error);
+      return false;
     }
   }
 

@@ -36,6 +36,7 @@ export interface IStorage {
   getQuestionsByUserId(userId: number): Promise<QuestionWithUser[]>;
   createQuestion(userId: number, question: InsertQuestion, tagNames: string[]): Promise<Question>;
   updateQuestion(id: number, question: Partial<InsertQuestion>): Promise<Question | undefined>;
+  deleteQuestion(id: number): Promise<boolean>;
   markQuestionAsSolved(id: number, answerId: number): Promise<boolean>;
   incrementQuestionViews(id: number): Promise<boolean>;
   
@@ -53,6 +54,7 @@ export interface IStorage {
   getAnswersByUserId(userId: number): Promise<AnswerWithUser[]>;
   createAnswer(userId: number, answer: InsertAnswer): Promise<Answer>;
   updateAnswer(id: number, answer: Partial<InsertAnswer>): Promise<Answer | undefined>;
+  deleteAnswer(id: number): Promise<boolean>;
   acceptAnswer(id: number): Promise<boolean>;
   
   // Vote operations

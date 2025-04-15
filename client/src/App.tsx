@@ -32,6 +32,7 @@ function Router() {
       {/* Questions routes */}
       <ProtectedRoute path="/questions" component={QuestionsPage} />
       <ProtectedRoute path="/questions/ask" component={QuestionFormPage} />
+      <ProtectedRoute path="/questions/edit/:id" component={QuestionFormPage} />
       <ProtectedRoute path="/questions/:id" component={QuestionPage} />
       
       {/* User routes */}

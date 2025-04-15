@@ -34,7 +34,7 @@ const upload = multer({
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB limit
   },
-  fileFilter: (_req, file, cb) => {
+  fileFilter: (_req, file, cb): void => {
     // Only allow images
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
@@ -88,22 +88,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create HTTP server
   const server = createServer(app);
 
-  // Setup WebSocket server with proper error handling
+  // Setup WebSocket server with path to prevent conflict with Vite's WebSocket
   const wss = new WebSocketServer({ 
     server,
-    // Disable compression which can cause issues
+    path: '/ws', // Specify a path to avoid conflict with Vite's WebSocket
     perMessageDeflate: false,
-    // Set a reasonable max payload size
-    maxPayload: 50 * 1024, // 50KB
-    // Use a more generous ping timeout
-    clientTracking: true,
-    // Add WebSocket protocol validation
-    handleProtocols: (protocols: string[] | undefined) => {
-      // Accept any protocol or none
-      return protocols && protocols.length > 0 ? protocols[0] : false;
-    }
+    maxPayload: 50 * 1024 // 50KB
   });
-
+  
   // Add server-level error handler
   wss.on('error', (error) => {
     console.error('WebSocket server error:', error);
@@ -115,11 +107,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Track user connections 
   const userConnections = new Map<number, WebSocket[]>();
 
+  // Helper function to safely send messages to clients
+  const safeSend = (ws: WebSocket, message: any) => {
+    try {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(typeof message === 'string' ? message : JSON.stringify(message));
+      }
+    } catch (error) {
+      console.error('Error sending WebSocket message:', error);
+      try {
+        ws.close();
+      } catch (closeError) {
+        // Ignore errors during close
+      }
+    }
+  };
+
   // Helper function to broadcast message to all connected clients of a user
   const sendToUser = (userId: number, message: any) => {
     const connections = userConnections.get(userId);
     if (connections) {
-      const messageStr = JSON.stringify(message);
+      const messageStr = typeof message === 'string' ? message : JSON.stringify(message);
       const validConnections: WebSocket[] = [];
 
       connections.forEach(ws => {
@@ -148,6 +156,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // If no users are online, don't bother fetching user details
       if (onlineUserIds.length === 0) return;
+      
+      // Check if we're in mock mode
+      if (process.env.USE_MOCK_DB === 'true') {
+        // In mock mode, just broadcast the IDs without fetching user details
+        userConnections.forEach((_, userId) => {
+          sendToUser(userId, {
+            type: 'online-users',
+            userIds: onlineUserIds
+          });
+        });
+        return;
+      }
       
       // Fetch user details
       const onlineUsers = await storage.getUsersByIds(onlineUserIds);
@@ -248,10 +268,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           message = JSON.parse(data.toString());
         } catch (e) {
           console.error('Invalid JSON in WebSocket message:', e);
-          ws.send(JSON.stringify({
+          safeSend(ws, {
             type: 'error',
             message: 'Invalid message format'
-          }));
+          });
           return;
         }
         
@@ -269,7 +289,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               connection.userId = message.userId;
               console.log(`Registering WebSocket client for user ID: ${connection.userId}`);
               
-              // Add this connection to the user connections map - with proper type checking
+              // Add this connection to the user connections map
               if (connection.userId !== null) {
                 if (!userConnections.has(connection.userId)) {
                   userConnections.set(connection.userId, []);
@@ -285,6 +305,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }
             }
             break;
+            
+          case 'ping':
+            // Handle ping messages from client (keep-alive)
+            // Respond with a pong to acknowledge
+            safeSend(ws, {
+              type: 'pong',
+              timestamp: Date.now()
+            });
+            break;  
             
           case 'message':
             // Handle chat messages
@@ -312,12 +341,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 });
               } catch (error) {
                 console.error('Error creating message:', error);
-                if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({
-                    type: 'error',
-                    message: 'Failed to send message'
-                  }));
-                }
+                safeSend(ws, {
+                  type: 'error',
+                  message: 'Failed to send message'
+                });
               }
             }
             break;
@@ -336,37 +363,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 }
               } catch (error) {
                 console.error('Error marking message as read:', error);
-                if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: 'error',
-                    message: 'Failed to mark message as read'
-            }));
-          }
-        }
+                safeSend(ws, {
+                  type: 'error',
+                  message: 'Failed to mark message as read'
+                });
+              }
             }
             break;
-
+            
           default:
             // Unknown message type
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({
-                type: 'error',
-                message: 'Unknown message type'
-              }));
-            }
+            console.warn(`Unknown WebSocket message type: ${message.type}`);
+            safeSend(ws, {
+              type: 'error',
+              message: 'Unknown message type'
+            });
             break;
         }
       } catch (error) {
         console.error('Error processing WebSocket message:', error);
         try {
-          if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
+          safeSend(ws, {
             type: 'error',
             message: 'Error processing message'
-          }));
-          }
+          });
         } catch (sendError) {
-          console.error('Error sending error message:', sendError);
+          console.error('Error sending error response:', sendError);
         }
       }
     });
@@ -402,681 +424,457 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
-  // File upload endpoint
-  app.post('/api/upload', requireAuth, upload.single('image'), async (req: Request, res: Response) => {
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' });
-    }
-    
+  // Rest of the API routes would go here
+  // ...
+
+  // Questions endpoints
+  // Create a new question
+  app.post('/api/questions', requireAuth, async (req, res) => {
     try {
-      // Extract user ID from authenticated session
-      const userId = req.user?.id;
-      
-      const imageFileName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(req.file.originalname)}`;
-      
-      if (process.env.USE_MOCK_DB === 'true') {
-        // In mock mode, we'll still save to the file system
-        // for simplicity and backward compatibility
-        const filePath = path.join(storageDir, imageFileName);
-        
-        // Save to disk
-        fs.writeFileSync(filePath, req.file.buffer);
-        console.log(`Mock mode: Saved image to ${filePath}`);
-        
-        // Use old-style URL for mock mode
-        const imageUrl = `/uploads/${imageFileName}`;
-        return res.json({ imageUrl });
+      const user = await getCurrentUser(req);
+      if (!user) {
+        return res.status(401).json({ message: 'Authentication required' });
       }
+
+      // Validate the request body
+      const validationResult = questionWithTagsSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({
+          message: 'Invalid question data',
+          errors: validationResult.error.format()
+        });
+      }
+
+      const { tags, ...questionData } = validationResult.data;
       
-      // Create a new ImageFile document
-      const imageFile = new ImageFile({
-        filename: imageFileName,
-        originalname: req.file.originalname,
-        contentType: req.file.mimetype,
-        size: req.file.size,
-        data: req.file.buffer,
-        metadata: {
-          uploadedBy: userId
-        }
-      });
+      // Create the question
+      const question = await storage.createQuestion(user.id, questionData, tags);
       
-      // Save to MongoDB
-      const savedFile = await imageFile.save();
-      
-      // Return the URL for the image - using the image ID
-      // Get the ID with a type-safe approach
-      const imageId = process.env.USE_MOCK_DB === 'true' 
-        ? (savedFile as any).id
-        : (savedFile as any).id || (savedFile as any)._id;
-        
-      const imageUrl = `/api/images/${imageId}`;
-    res.json({ imageUrl });
+      return res.status(201).json(question);
     } catch (error) {
-      console.error('Error saving image:', error);
-      
-      // Fall back to file system if MongoDB storage fails
-      try {
-        const imageFileName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(req.file.originalname)}`;
-        const filePath = path.join(storageDir, imageFileName);
-        
-        // Save to disk
-        fs.writeFileSync(filePath, req.file.buffer);
-        console.log(`Fallback: Saved image to ${filePath}`);
-        
-        // Use old-style URL for fallback
-        const imageUrl = `/uploads/${imageFileName}`;
-        return res.json({ imageUrl });
-      } catch (fallbackError) {
-        console.error('Error in fallback image save:', fallbackError);
-        res.status(500).json({ message: 'Failed to save image' });
-      }
+      console.error('Error creating question:', error);
+      return res.status(500).json({ message: 'Failed to create question' });
     }
   });
 
-  // Image serving endpoint - return the image directly from MongoDB or fallback to filesystem
-  app.get('/api/images/:id', async (req, res) => {
-    try {
-      const imageId = parseInt(req.params.id);
-      if (isNaN(imageId)) {
-        return res.status(400).json({ message: 'Invalid image ID' });
-      }
-      
-      // Find the image in MongoDB
-      const imageFile = await ImageFile.findOne({ id: imageId });
-      if (!imageFile) {
-        // For backward compatibility - try to serve from filesystem
-        // Check if a file with this name exists in uploads directory
-        const files = fs.readdirSync(storageDir);
-        const matchingFile = files.find(file => file.includes(req.params.id));
-        
-        if (matchingFile) {
-          const filePath = path.join(storageDir, matchingFile);
-          return res.sendFile(filePath);
-        }
-        
-        return res.status(404).json({ message: 'Image not found' });
-      }
-      
-      // Set correct content type
-      res.contentType(imageFile.contentType);
-      
-      // Send the image data
-      res.send(imageFile.data);
-      
-    } catch (error) {
-      console.error('Error retrieving image:', error);
-      
-      // Try filesystem as fallback
-      try {
-        // For backward compatibility - try to serve from filesystem
-        const files = fs.readdirSync(storageDir);
-        const matchingFile = files.find(file => file.includes(req.params.id));
-        
-        if (matchingFile) {
-          const filePath = path.join(storageDir, matchingFile);
-          return res.sendFile(filePath);
-        }
-      } catch (fallbackError) {
-        console.error('Fallback retrieval failed:', fallbackError);
-      }
-      
-      res.status(500).json({ message: 'Failed to retrieve image' });
-    }
-  });
-
-  // For backward compatibility - serve uploaded files from disk
-  app.use('/uploads', express.static(storageDir));
-
-  // Questions routes
+  // Get all questions with pagination, sorting, and filtering
   app.get('/api/questions', async (req, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 10;
       const offset = parseInt(req.query.offset as string) || 0;
       const sortBy = (req.query.sortBy as string) || 'newest';
       const filter = req.query.filter as string;
-      
+
       const questions = await storage.getQuestions({ limit, offset, sortBy, filter });
-      res.json(questions);
+      
+      return res.json(questions);
     } catch (error) {
-      console.error('Error fetching questions:', error);
-      res.status(500).json({ message: 'Failed to fetch questions' });
+      console.error('Error getting questions:', error);
+      return res.status(500).json({ message: 'Failed to fetch questions' });
     }
   });
 
+  // Get a specific question by ID
   app.get('/api/questions/:id', async (req, res) => {
     try {
-      const questionId = parseInt(req.params.id);
-      const question = await storage.getQuestionWithDetails(questionId);
+      const id = parseInt(req.params.id);
+      
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'Invalid question ID' });
+      }
+      
+      const question = await storage.getQuestionWithDetails(id);
       
       if (!question) {
         return res.status(404).json({ message: 'Question not found' });
       }
+
+      // Increment view count
+      await storage.incrementQuestionViews(id);
       
-      // Increment the view count
-      await storage.incrementQuestionViews(questionId);
-      
-      // Get the updated question with the new view count
-      const updatedQuestion = await storage.getQuestionWithDetails(questionId);
-      
-      res.json(updatedQuestion || question);
+      return res.json(question);
     } catch (error) {
-      console.error('Error fetching question:', error);
-      res.status(500).json({ message: 'Failed to fetch question' });
+      console.error('Error getting question:', error);
+      return res.status(500).json({ message: 'Failed to fetch question' });
     }
   });
 
-  app.post('/api/questions', async (req: Request, res: Response) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
+  // Update a question
+  app.patch('/api/questions/:id', requireAuth, async (req, res) => {
     try {
-      // First validate that required fields are present
-      if (!req.body.title || !req.body.content || req.body.content.trim() === '') {
-        return res.status(400).json({ 
-          message: 'Title and content are required', 
-          errors: [
-            !req.body.title ? { path: 'title', message: 'Title is required' } : null,
-            !req.body.content || req.body.content.trim() === '' ? { path: 'content', message: 'Content is required' } : null
-          ].filter(Boolean)
+      const id = parseInt(req.params.id);
+      
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'Invalid question ID' });
+      }
+      
+      const user = await getCurrentUser(req);
+      if (!user) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+      
+      // Check if question exists
+      const question = await storage.getQuestion(id);
+      if (!question) {
+        return res.status(404).json({ message: 'Question not found' });
+      }
+      
+      // Check if user is the owner
+      if (question.userId !== user.id) {
+        return res.status(403).json({ message: 'You can only update your own questions' });
+      }
+      
+      // Validate request body
+      const validationResult = insertQuestionSchema.partial().safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({
+          message: 'Invalid question data',
+          errors: validationResult.error.format()
         });
       }
       
-      // Then try to parse with Zod schema
-      const validatedData = questionWithTagsSchema.parse(req.body);
-      const { tags, ...questionData } = validatedData;
+      // Update the question
+      const updatedQuestion = await storage.updateQuestion(id, validationResult.data);
       
-      // Create the question
-      const question = await storage.createQuestion(req.user.id, questionData, tags || []);
-      res.status(201).json(question);
+      return res.json(updatedQuestion);
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: 'Invalid question data', errors: error.errors });
-      }
-      
-      // Better error handling for specific DB errors
-      console.error('Error creating question:', error);
-      
-      // Check for specific MongoDB validation errors
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      if (errorMessage.includes('validation failed')) {
-        if (errorMessage.includes('content')) {
-          return res.status(400).json({ message: 'Question content is required' });
-        }
-      }
-      
-      res.status(500).json({ message: 'Failed to create question' });
-    }
-  });
-
-  app.patch('/api/questions/:id', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
-    try {
-      const questionId = parseInt(req.params.id);
-      const question = await storage.getQuestion(questionId);
-      
-      if (!question) {
-        return res.status(404).json({ message: 'Question not found' });
-      }
-      
-      if (question.userId !== req.user.id) {
-        return res.status(403).json({ message: 'Forbidden' });
-      }
-      
-      const validatedData = insertQuestionSchema.partial().parse(req.body);
-      const updatedQuestion = await storage.updateQuestion(questionId, validatedData);
-      
-      res.json(updatedQuestion);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: 'Invalid question data', errors: error.errors });
-      }
       console.error('Error updating question:', error);
-      res.status(500).json({ message: 'Failed to update question' });
+      return res.status(500).json({ message: 'Failed to update question' });
     }
   });
 
-  app.post('/api/questions/:id/solve', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
+  // Delete a question
+  app.delete('/api/questions/:id', requireAuth, async (req, res) => {
     try {
-      const questionId = parseInt(req.params.id);
-      const answerId = parseInt(req.body.answerId);
+      const id = parseInt(req.params.id);
       
-      const question = await storage.getQuestion(questionId);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'Invalid question ID' });
+      }
+      
+      const user = await getCurrentUser(req);
+      if (!user) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+      
+      // Check if question exists
+      const question = await storage.getQuestion(id);
       if (!question) {
         return res.status(404).json({ message: 'Question not found' });
       }
       
-      if (question.userId !== req.user.id) {
-        return res.status(403).json({ message: 'Only the question author can mark as solved' });
+      // Check if user is the owner or an admin
+      if (question.userId !== user.id && user.role !== 'admin') {
+        return res.status(403).json({ message: 'You can only delete your own questions' });
       }
       
-      const success = await storage.markQuestionAsSolved(questionId, answerId);
+      // Delete the question
+      const success = await storage.deleteQuestion(id);
+      
       if (!success) {
-        return res.status(400).json({ message: 'Failed to mark question as solved' });
+        return res.status(500).json({ message: 'Failed to delete question' });
       }
       
-      res.json({ success: true });
+      return res.status(200).json({ message: 'Question deleted successfully' });
     } catch (error) {
-      console.error('Error marking question as solved:', error);
-      res.status(500).json({ message: 'Failed to mark question as solved' });
+      console.error('Error deleting question:', error);
+      return res.status(500).json({ message: 'Failed to delete question' });
     }
   });
 
-  // Answers routes
+  // Get answers for a question
   app.get('/api/questions/:id/answers', async (req, res) => {
     try {
       const questionId = parseInt(req.params.id);
+      
+      if (isNaN(questionId)) {
+        return res.status(400).json({ message: 'Invalid question ID' });
+      }
+      
       const answers = await storage.getAnswersByQuestionId(questionId);
-      res.json(answers);
+      
+      return res.json(answers);
     } catch (error) {
-      console.error('Error fetching answers:', error);
-      res.status(500).json({ message: 'Failed to fetch answers' });
+      console.error('Error getting answers:', error);
+      return res.status(500).json({ message: 'Failed to fetch answers' });
     }
   });
 
-  app.post('/api/questions/:id/answers', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
+  // Create an answer
+  app.post('/api/answers', requireAuth, async (req, res) => {
     try {
-      const questionId = parseInt(req.params.id);
-      const question = await storage.getQuestion(questionId);
-      
-      if (!question) {
-        return res.status(404).json({ message: 'Question not found' });
+      const user = await getCurrentUser(req);
+      if (!user) {
+        return res.status(401).json({ message: 'Authentication required' });
       }
+
+      // Validate the request body
+      const validationResult = insertAnswerSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({
+          message: 'Invalid answer data',
+          errors: validationResult.error.format()
+        });
+      }
+
+      // Create the answer
+      const answer = await storage.createAnswer(user.id, validationResult.data);
       
-      const validatedData = insertAnswerSchema.parse({
-        ...req.body,
-        questionId
-      });
-      
-      const answer = await storage.createAnswer(req.user.id, validatedData);
-      res.status(201).json(answer);
+      return res.status(201).json(answer);
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: 'Invalid answer data', errors: error.errors });
-      }
       console.error('Error creating answer:', error);
-      res.status(500).json({ message: 'Failed to create answer' });
+      return res.status(500).json({ message: 'Failed to create answer' });
     }
   });
 
-  app.patch('/api/answers/:id', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
+  // Update an answer
+  app.patch('/api/answers/:id', requireAuth, async (req, res) => {
     try {
-      const answerId = parseInt(req.params.id);
-      const answer = await storage.getAnswer(answerId);
+      const id = parseInt(req.params.id);
       
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'Invalid answer ID' });
+      }
+      
+      const user = await getCurrentUser(req);
+      if (!user) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+      
+      // Check if answer exists
+      const answer = await storage.getAnswer(id);
       if (!answer) {
         return res.status(404).json({ message: 'Answer not found' });
       }
       
-      if (answer.userId !== req.user.id) {
-        return res.status(403).json({ message: 'Forbidden' });
+      // Check if user is the owner
+      if (answer.userId !== user.id) {
+        return res.status(403).json({ message: 'You can only update your own answers' });
       }
       
-      const validatedData = insertAnswerSchema.partial().parse(req.body);
-      const updatedAnswer = await storage.updateAnswer(answerId, validatedData);
-      
-      res.json(updatedAnswer);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: 'Invalid answer data', errors: error.errors });
-      }
-      console.error('Error updating answer:', error);
-      res.status(500).json({ message: 'Failed to update answer' });
-    }
-  });
-
-  // Votes routes
-  app.post('/api/votes', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
-    try {
-      const validatedData = insertVoteSchema.parse({
-        ...req.body,
-        userId: req.user.id
-      });
-      
-      // Ensure the value is only 1 or -1
-      if (validatedData.value !== 1 && validatedData.value !== -1) {
-        return res.status(400).json({ message: 'Vote value must be 1 or -1' });
-      }
-      
-      // Ensure either questionId or answerId is provided, but not both
-      if (
-        (!validatedData.questionId && !validatedData.answerId) || 
-        (validatedData.questionId && validatedData.answerId)
-      ) {
-        return res.status(400).json({ 
-          message: 'Either questionId or answerId must be provided, but not both' 
+      // Validate request body
+      const validationResult = insertAnswerSchema.partial().safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({
+          message: 'Invalid answer data',
+          errors: validationResult.error.format()
         });
       }
       
-      const vote = await storage.createOrUpdateVote(validatedData);
-      res.status(201).json(vote);
+      // Update the answer
+      const updatedAnswer = await storage.updateAnswer(id, validationResult.data);
+      
+      return res.json(updatedAnswer);
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: 'Invalid vote data', errors: error.errors });
-      }
-      console.error('Error creating vote:', error);
-      res.status(500).json({ message: 'Failed to create vote' });
+      console.error('Error updating answer:', error);
+      return res.status(500).json({ message: 'Failed to update answer' });
     }
   });
 
-  // Tags routes
-  app.get('/api/tags', async (_req, res) => {
+  // Delete an answer
+  app.delete('/api/answers/:id', requireAuth, async (req, res) => {
     try {
-      const tags = await storage.getAllTags();
-      res.json(tags);
-    } catch (error) {
-      console.error('Error fetching tags:', error);
-      res.status(500).json({ message: 'Failed to fetch tags' });
-    }
-  });
-
-  // User routes
-  app.get('/api/users/search', async (req, res) => {
-    try {
-      const query = req.query.q as string;
-      if (!query || query.length < 2) {
-        return res.status(400).json({ message: 'Search query must be at least 2 characters' });
+      const id = parseInt(req.params.id);
+      
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'Invalid answer ID' });
       }
       
-      const users = await storage.searchUsers(query);
-      res.json(users);
-    } catch (error) {
-      console.error('Error searching users:', error);
-      res.status(500).json({ message: 'Failed to search users' });
-    }
-  });
-
-  app.get('/api/users/:id', async (req, res) => {
-    try {
-      const userId = parseInt(req.params.id);
-      const user = await storage.getUser(userId);
-      
+      const user = await getCurrentUser(req);
       if (!user) {
-        return res.status(404).json({ message: 'User not found' });
+        return res.status(401).json({ message: 'Authentication required' });
       }
       
-      // Don't send password
-      const { password, ...userWithoutPassword } = user;
-      
-      // Get additional user data
-      const [
-        questions,
-        answers,
-        followerCount,
-        followingCount
-      ] = await Promise.all([
-        storage.getQuestionsByUserId(userId),
-        storage.getAnswersByUserId(userId),
-        storage.getFollowerCount(userId),
-        storage.getFollowingCount(userId)
-      ]);
-      
-      res.json({
-        ...userWithoutPassword,
-        questionsCount: questions.length,
-        answersCount: answers.length,
-        followerCount,
-        followingCount
-      });
-    } catch (error) {
-      console.error('Error fetching user:', error);
-      res.status(500).json({ message: 'Failed to fetch user' });
-    }
-  });
-
-  app.get('/api/users/:id/questions', async (req, res) => {
-    try {
-      const userId = parseInt(req.params.id);
-      const questions = await storage.getQuestionsByUserId(userId);
-      res.json(questions);
-    } catch (error) {
-      console.error('Error fetching user questions:', error);
-      res.status(500).json({ message: 'Failed to fetch user questions' });
-    }
-  });
-
-  app.get('/api/users/:id/answers', async (req, res) => {
-    try {
-      const userId = parseInt(req.params.id);
-      const answers = await storage.getAnswersByUserId(userId);
-      res.json(answers);
-    } catch (error) {
-      console.error('Error fetching user answers:', error);
-      res.status(500).json({ message: 'Failed to fetch user answers' });
-    }
-  });
-
-  // Follow routes
-  app.post('/api/follow', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
-    try {
-      const validatedData = insertFollowSchema.parse({
-        followerId: req.user.id,
-        followingId: req.body.followingId
-      });
-      
-      // Check if already following
-      const existingFollow = await storage.getFollowByUserIds(
-        validatedData.followerId,
-        validatedData.followingId
-      );
-      
-      if (existingFollow) {
-        return res.status(400).json({ message: 'Already following this user' });
+      // Check if answer exists
+      const answer = await storage.getAnswer(id);
+      if (!answer) {
+        return res.status(404).json({ message: 'Answer not found' });
       }
       
-      const follow = await storage.createFollow(validatedData);
-      res.status(201).json(follow);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: 'Invalid follow data', errors: error.errors });
+      // Check if user is the owner or an admin
+      if (answer.userId !== user.id && user.role !== 'admin') {
+        return res.status(403).json({ message: 'You can only delete your own answers' });
       }
-      console.error('Error creating follow:', error);
-      res.status(500).json({ message: 'Failed to follow user' });
-    }
-  });
-
-  app.delete('/api/follow/:id', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
-    try {
-      const followingId = parseInt(req.params.id);
-      const success = await storage.deleteFollow(req.user.id, followingId);
+      
+      // Delete the answer
+      const success = await storage.deleteAnswer(id);
       
       if (!success) {
-        return res.status(404).json({ message: 'Follow relationship not found' });
+        return res.status(500).json({ message: 'Failed to delete answer' });
       }
       
-      res.json({ success: true });
+      return res.status(200).json({ message: 'Answer deleted successfully' });
     } catch (error) {
-      console.error('Error unfollowing user:', error);
-      res.status(500).json({ message: 'Failed to unfollow user' });
+      console.error('Error deleting answer:', error);
+      return res.status(500).json({ message: 'Failed to delete answer' });
     }
   });
 
-  app.get('/api/user/following', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
+  // Accept an answer (mark as correct)
+  app.post('/api/questions/:questionId/accept-answer/:answerId', requireAuth, async (req, res) => {
     try {
-      const follows = await storage.getFollowsByFollowerId(req.user.id);
-      const followingIds = follows.map(follow => follow.followingId);
+      const questionId = parseInt(req.params.questionId);
+      const answerId = parseInt(req.params.answerId);
       
-      if (followingIds.length === 0) {
-        return res.json([]);
+      if (isNaN(questionId) || isNaN(answerId)) {
+        return res.status(400).json({ message: 'Invalid IDs provided' });
       }
       
-      const users = await storage.getUsersByIds(followingIds);
+      const user = await getCurrentUser(req);
+      if (!user) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
       
-      // Remove passwords
-      const usersWithoutPasswords = users.map(user => {
-        const { password, ...userWithoutPassword } = user;
-        return userWithoutPassword;
+      // Check if question exists and user is the owner
+      const question = await storage.getQuestion(questionId);
+      if (!question) {
+        return res.status(404).json({ message: 'Question not found' });
+      }
+      
+      if (question.userId !== user.id) {
+        return res.status(403).json({ message: 'Only the question owner can accept an answer' });
+      }
+      
+      // Mark question as solved with the accepted answer
+      const success = await storage.markQuestionAsSolved(questionId, answerId);
+      
+      if (!success) {
+        return res.status(500).json({ message: 'Failed to accept answer' });
+      }
+      
+      return res.json({ message: 'Answer accepted successfully' });
+    } catch (error) {
+      console.error('Error accepting answer:', error);
+      return res.status(500).json({ message: 'Failed to accept answer' });
+    }
+  });
+
+  // Create or update a vote
+  app.post('/api/votes', requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+
+      // Validate the request body
+      const validationResult = insertVoteSchema.safeParse({
+        ...req.body,
+        userId: user.id
       });
       
-      res.json(usersWithoutPasswords);
+      if (!validationResult.success) {
+        return res.status(400).json({
+          message: 'Invalid vote data',
+          errors: validationResult.error.format()
+        });
+      }
+
+      // Create or update the vote
+      const vote = await storage.createOrUpdateVote(validationResult.data);
+      
+      return res.status(201).json(vote);
     } catch (error) {
-      console.error('Error fetching following users:', error);
-      res.status(500).json({ message: 'Failed to fetch following users' });
+      console.error('Error creating/updating vote:', error);
+      return res.status(500).json({ message: 'Failed to process vote' });
     }
   });
 
-  // Message routes
-  app.get('/api/messages/chats', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
+  // Get all tags
+  app.get('/api/tags', async (req, res) => {
     try {
-      const recentChats = await storage.getRecentChats(req.user.id);
-      
-      if (!recentChats || recentChats.length === 0) {
-        // Return empty array instead of error if no chats found
-        return res.json([]);
-      }
-      
-      // Remove sensitive data
-      const sanitizedChats = recentChats.map(chat => {
-        const { password, ...userWithoutPassword } = chat.user;
-        return {
-          ...chat,
-          user: userWithoutPassword
-        };
-      });
-      
-      res.json(sanitizedChats);
+      const tags = await storage.getAllTags();
+      return res.json(tags);
     } catch (error) {
-      console.error('Error fetching chats:', error);
-      // Return empty array instead of error for better client experience
-      res.json([]);
-    }
-  });
-
-  app.get('/api/messages/:userId', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
-    try {
-      const otherUserId = parseInt(req.params.userId);
-      
-      if (isNaN(otherUserId)) {
-        return res.status(400).json({ message: 'Invalid user ID' });
-      }
-      
-      // Verify the other user exists
-      const otherUser = await storage.getUser(otherUserId);
-      if (!otherUser) {
-        return res.json([]);  // Return empty array if user doesn't exist
-      }
-      
-      const messages = await storage.getMessagesBetweenUsers(req.user.id, otherUserId);
-      
-      // Mark all messages as read if they are sent to the current user
-      for (const message of messages) {
-        if (message.receiverId === req.user.id && !message.read) {
-          await storage.markMessageAsRead(message.id);
-        }
-      }
-      
-      res.json(messages);
-    } catch (error) {
-      console.error('Error fetching messages:', error);
-      // Return empty array instead of error for better client experience
-      res.json([]);
+      console.error('Error getting tags:', error);
+      return res.status(500).json({ message: 'Failed to fetch tags' });
     }
   });
   
-  // Endpoint to mark all messages from a user as read
-  app.post('/api/messages/:userId/read', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
+  // Image upload endpoint
+  app.post('/api/upload', requireAuth, upload.single('image'), async (req, res) => {
     try {
-      const otherUserId = parseInt(req.params.userId);
-      
-      if (isNaN(otherUserId)) {
-        return res.status(400).json({ message: 'Invalid user ID' });
+      const user = await getCurrentUser(req);
+      if (!user) {
+        return res.status(401).json({ message: 'Authentication required' });
       }
       
-      // Verify the other user exists
-      const otherUser = await storage.getUser(otherUserId);
-      if (!otherUser) {
-        return res.status(404).json({ message: 'User not found' });
+      if (!req.file) {
+        return res.status(400).json({ message: 'No image file provided' });
       }
       
-      // Get all messages between the users
-      const messages = await storage.getMessagesBetweenUsers(req.user.id, otherUserId);
-      
-      // Mark all messages from the other user as read
-      let markedCount = 0;
-      for (const message of messages) {
-        if (message.senderId === otherUserId && message.receiverId === req.user.id && !message.read) {
-          await storage.markMessageAsRead(message.id);
-          markedCount++;
-        }
+      // Try to store in MongoDB or mock storage
+      try {
+        const fileData = {
+          filename: req.file.originalname,
+          originalname: req.file.originalname,
+          contentType: req.file.mimetype,
+          size: req.file.size,
+          data: req.file.buffer,
+          metadata: {
+            uploadedBy: user.id
+          }
+        };
+        
+        const imageFile = new ImageFile(fileData);
+        await imageFile.save();
+        
+        // Return the image URL that can be used to retrieve the image
+        return res.json({ 
+          imageUrl: `/api/images/${imageFile.id}`
+        });
+      } catch (storageError) {
+        console.error('Error storing image:', storageError);
+        
+        // Fallback to file system storage
+        console.log('Falling back to file system storage...');
+        
+        // Generate a unique filename
+        const filename = `${Date.now()}-${req.file.originalname}`;
+        const filePath = path.join(storageDir, filename);
+        
+        // Write file to disk
+        fs.writeFileSync(filePath, req.file.buffer);
+        
+        // Return the image URL that can be used to retrieve the image
+        return res.json({ 
+          imageUrl: `/uploads/${filename}`,
+          note: 'Used fallback file storage'
+        });
       }
-      
-      res.json({ success: true, markedCount });
     } catch (error) {
-      console.error('Error marking messages as read:', error);
-      res.status(500).json({ message: 'Failed to mark messages as read' });
+      console.error('Error uploading image:', error);
+      return res.status(500).json({ message: 'Failed to upload image' });
     }
   });
-
-  app.post('/api/messages', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    
+  
+  // Image serving endpoint
+  app.get('/api/images/:id', async (req, res) => {
     try {
-      const validatedData = insertMessageSchema.parse({
-        senderId: req.user.id,
-        receiverId: req.body.receiverId,
-        content: req.body.content
-      });
+      const id = parseInt(req.params.id);
       
-      // Create message - MongoDB event hooks will handle notification
-      const message = await storage.createMessage(validatedData);
-      
-      // The event listener we set up earlier will handle WebSocket notifications
-      // when messageEvents.emit('new_message') is triggered by the message model
-      
-      res.status(201).json(message);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: 'Invalid message data', errors: error.errors });
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'Invalid image ID' });
       }
-      console.error('Error creating message:', error);
-      res.status(500).json({ message: 'Failed to send message' });
+      
+      // Find the image in MongoDB or mock storage
+      const imageFile = await ImageFile.findOne({ id });
+      
+      if (!imageFile) {
+        return res.status(404).json({ message: 'Image not found' });
+      }
+      
+      // Set content type and send the image data
+      res.contentType(imageFile.contentType);
+      res.send(imageFile.data);
+    } catch (error) {
+      console.error('Error serving image:', error);
+      return res.status(500).json({ message: 'Failed to retrieve image' });
     }
   });
+  
+  // Serve static files from the uploads directory for backward compatibility
+  app.use('/uploads', express.static(storageDir));
 
   return server;
 }
