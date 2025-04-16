@@ -10,8 +10,8 @@ import {
   QuestionWithUser, AnswerWithUser
 } from "@shared/schema";
 
-import session from "express-session";
-import createMemoryStore from "memorystore";
+import session from 'express-session';
+import createMemoryStore from 'memorystore';
 import { DatabaseStorage } from './database';
 import mongoose from "mongoose";
 

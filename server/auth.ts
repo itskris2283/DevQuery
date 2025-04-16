@@ -50,6 +50,24 @@ export function setupAuth(app: Express) {
   passport.use(
     new LocalStrategy(async (username, password, done) => {
       try {
+        // Special handling for mock mode
+        if (process.env.USE_MOCK_DB === 'true') {
+          console.log('Using mock login strategy');
+          // For mock mode, accept any credentials and create a mock user
+          return done(null, {
+            id: Math.floor(Math.random() * 100000) + 1,
+            username: username,
+            email: `${username}@example.com`,
+            password: 'mock-password-hash',
+            fullName: username, 
+            bio: null,
+            avatarUrl: null,
+            role: 'student',
+            createdAt: new Date()
+          });
+        }
+        
+        // Normal operation for non-mock mode
         const user = await storage.getUserByUsername(username);
         
         if (!user || !(await comparePasswords(password, user.password))) {
@@ -68,8 +86,29 @@ export function setupAuth(app: Express) {
   passport.deserializeUser(async (id: number, done) => {
     try {
       const user = await storage.getUser(id);
+      
+      // If we're in mock mode and the session refers to a user not in our mock DB
+      if (!user && process.env.USE_MOCK_DB === 'true') {
+        console.log(`Mock mode: Creating temporary user for session ID ${id}`);
+        // Create a temporary mock user for the session to avoid errors
+        const tempUser = {
+          id: id,
+          username: `user_${id}`,
+          email: `user_${id}@example.com`,
+          password: 'password-hash',
+          fullName: `User ${id}`,
+          bio: null,
+          avatarUrl: null,
+          role: 'student',
+          createdAt: new Date()
+        };
+        done(null, tempUser);
+        return;
+      }
+      
       done(null, user);
     } catch (error) {
+      console.error('Error deserializing user:', error);
       done(error);
     }
   });
@@ -94,9 +133,16 @@ export function setupAuth(app: Express) {
       
       // Hash password and create user
       const hashedPassword = await hashPassword(userData.password);
+      
+      // Ensure all required fields are passed to createUser
       const user = await storage.createUser({
-        ...userData,
+        username: userData.username,
+        email: userData.email,
         password: hashedPassword,
+        fullName: userData.fullName,
+        role: userData.role || "student",
+        bio: userData.bio || null,
+        avatarUrl: userData.avatarUrl || null,
       });
 
       // Log the user in
@@ -114,12 +160,14 @@ export function setupAuth(app: Express) {
           errors: error.errors 
         });
       }
-      next(error);
+      console.error("Registration error:", error);
+      res.status(500).json({ message: "Registration failed. Please try again later." });
     }
   });
 
   app.post("/api/login", (req, res, next) => {
-    passport.authenticate("local", (err, user, info) => {
+    // Normal authentication with mock support already in the LocalStrategy
+    passport.authenticate("local", (err: Error | null, user: Express.User | undefined, info: { message: string }) => {
       if (err) return next(err);
       
       if (!user) {
@@ -152,4 +200,19 @@ export function setupAuth(app: Express) {
     const { password, ...userWithoutPassword } = req.user;
     res.json(userWithoutPassword);
   });
+
+  // Authentication middleware for protected routes
+  const requireAuth = (req: any, res: any, next: any) => {
+    if (req.isAuthenticated()) {
+      return next();
+    }
+    res.status(401).json({ message: 'Unauthorized' });
+  };
+
+  // Helper to get the current authenticated user
+  const getCurrentUser = (req: any) => {
+    return req.user;
+  };
+
+  return { requireAuth, getCurrentUser };
 }

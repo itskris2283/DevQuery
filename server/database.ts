@@ -1,32 +1,53 @@
 import { IStorage } from './storage';
 import session from 'express-session';
-import MongoStore from 'connect-mongo';
-import createMemoryStore from 'memorystore';
+import mongoose from 'mongoose';
 import { connectToDatabase } from './mongo-db';
-import { 
-  User, InsertUser, 
-  Question, InsertQuestion, 
-  Tag, InsertTag, 
-  QuestionWithUser,
-  Answer, InsertAnswer, 
-  AnswerWithUser,
-  Vote, InsertVote,
-  Follow, InsertFollow,
-  Message, InsertMessage
-} from '@shared/schema';
-
-// Setup memory store for sessions when no database is available
-const MemoryStore = createMemoryStore(session);
-
-// Import MongoDB models
 import UserModel, { IUser } from './models/user.model';
 import QuestionModel, { IQuestion } from './models/question.model';
+import AnswerModel, { IAnswer } from './models/answer.model';
 import TagModel, { ITag } from './models/tag.model';
 import QuestionTagModel, { IQuestionTag } from './models/question-tag.model';
-import AnswerModel, { IAnswer } from './models/answer.model';
 import VoteModel, { IVote } from './models/vote.model';
 import FollowModel, { IFollow } from './models/follow.model';
-import MessageModel, { IMessage } from './models/message.model';
+import MessageModel, { IMessage, messageEvents } from './models/message.model';
+import { 
+  safeGetUserById, 
+  safeGetUserByUsername, 
+  safeCreateUser, 
+  safeCreateQuestion, 
+  safeGetQuestions, 
+  safeCreateAnswer, 
+  safeGetQuestionWithDetails, 
+  safeIncrementQuestionViews, 
+  safeGetAnswersByQuestionId, 
+  safeGetAllTags,
+  safeGetRecentChats,
+  isMockMode
+} from './safeMockMode';
+import { 
+  User, 
+  Question, 
+  Tag, 
+  Answer, 
+  Vote, 
+  Follow, 
+  Message,
+  QuestionWithUser,
+  AnswerWithUser,
+  InsertUser,
+  InsertQuestion,
+  InsertTag,
+  InsertAnswer,
+  InsertVote,
+  InsertFollow,
+  InsertMessage
+} from '@shared/schema';
+import MongoStore from 'connect-mongo';
+// Setup memory store for sessions when no database is available
+import createMemoryStore from 'memorystore';
+import express from 'express';
+
+const MemoryStore = createMemoryStore(session);
 
 export class DatabaseStorage implements IStorage {
   sessionStore: session.Store;
@@ -51,7 +72,7 @@ export class DatabaseStorage implements IStorage {
         crypto: {
           secret: process.env.SESSION_SECRET || 'devquery-secret-key'
         }
-      });
+      }) as session.Store;
     }
 
     // Initialize database connection
@@ -76,6 +97,7 @@ export class DatabaseStorage implements IStorage {
       username: doc.username,
       email: doc.email,
       password: doc.password,
+      fullName: doc.fullName,
       bio: doc.bio,
       avatarUrl: doc.avatarUrl,
       role: doc.role,
@@ -152,41 +174,15 @@ export class DatabaseStorage implements IStorage {
 
   // User operations
   async getUser(id: number): Promise<User | undefined> {
-    try {
-      const user = await UserModel.findOne({ id });
-      return user ? this.documentToUser(user) : undefined;
-    } catch (error) {
-      console.error('Error getting user:', error);
-      return undefined;
-    }
+    return safeGetUserById(id, this.documentToUser.bind(this));
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    try {
-      const user = await UserModel.findOne({ username });
-      return user ? this.documentToUser(user) : undefined;
-    } catch (error) {
-      console.error('Error getting user by username:', error);
-      return undefined;
-    }
+    return safeGetUserByUsername(username, this.documentToUser.bind(this));
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    try {
-      // Create a new user instance without saving yet
-      const user = new UserModel({
-        ...insertUser,
-        // Other fields will be added by the pre-save hook in the model
-      });
-      
-      // Save the user - let the model's pre-save hook handle the ID auto-increment
-      await user.save();
-      
-      return this.documentToUser(user);
-    } catch (error) {
-      console.error('Error creating user:', error);
-      throw error;
-    }
+    return safeCreateUser(insertUser, this.documentToUser.bind(this));
   }
 
   async getUsersByIds(ids: number[]): Promise<User[]> {
@@ -227,6 +223,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getQuestionWithDetails(id: number): Promise<QuestionWithUser | undefined> {
+    // Use the safe implementation when in mock mode
+    if (isMockMode()) {
+      return safeGetQuestionWithDetails(
+        id,
+        this.documentToQuestion.bind(this),
+        this.documentToUser.bind(this),
+        this.documentToTag.bind(this)
+      );
+    }
+
     try {
       const question = await QuestionModel.findOne({ id });
       if (!question) return undefined;
@@ -260,6 +266,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getQuestions(options: { limit: number; offset: number; sortBy: string; filter?: string; }): Promise<QuestionWithUser[]> {
+    // Use the safe mock implementation when in mock mode
+    if (isMockMode()) {
+      return safeGetQuestions(
+        options, 
+        this.documentToQuestion.bind(this),
+        this.documentToUser.bind(this),
+        this.documentToTag.bind(this)
+      );
+    }
+
     try {
       const { limit, offset, sortBy, filter } = options;
       
@@ -288,7 +304,7 @@ export class DatabaseStorage implements IStorage {
         .limit(limit);
 
       // Get additional data for each question
-      const questionsWithDetails = await Promise.all(questions.map(async (question) => {
+      const questionsWithDetails = await Promise.all(questions.map(async (question: IQuestion) => {
         const user = await UserModel.findOne({ id: question.userId });
         if (!user) throw new Error(`User not found for question ${question.id}`);
 
@@ -320,78 +336,49 @@ export class DatabaseStorage implements IStorage {
     try {
       const questions = await QuestionModel.find({ userId });
       
-      // Get additional data for each question
-      const questionsWithDetails = await Promise.all(questions.map(async (question) => {
-        const user = await UserModel.findOne({ id: userId });
-        if (!user) throw new Error(`User not found for question ${question.id}`);
-
-        const questionTags = await QuestionTagModel.find({ questionId: question.id });
-        const tagIds = questionTags.map(qt => qt.tagId);
-        const tags = await TagModel.find({ id: { $in: tagIds } });
-
-        const votesCount = await this.getVotesCount(question.id);
-        const answersCount = await AnswerModel.countDocuments({ questionId: question.id });
-
+      // Convert to QuestionWithUser format
+      const userQuestions = await Promise.all(questions.map(async (question: IQuestion) => {
+        const user = await this.getUser(question.userId);
+        const tags = await this.getTagsForQuestion(question.id);
+        
         return {
           ...this.documentToQuestion(question),
-          user: this.documentToUser(user),
-          tags: tags.map(tag => this.documentToTag(tag)),
-          votesCount,
-          answersCount,
-          views: question.views
+          user: user || { id: 0, username: 'Unknown', avatarUrl: null },
+          tags
         };
       }));
-
-      return questionsWithDetails;
+      
+      return userQuestions;
     } catch (error) {
-      console.error('Error getting questions by user ID:', error);
+      console.error('Error fetching questions by user ID:', error);
       return [];
     }
   }
 
   async createQuestion(userId: number, question: InsertQuestion, tagNames: string[]): Promise<Question> {
-    try {
-      // Create the question
-      const newQuestion = new QuestionModel({
-        ...question,
-        userId,
-        views: 0,
-        solved: false
-      });
-      await newQuestion.save();
-
-      // Process tags
-      if (tagNames && tagNames.length > 0) {
-        for (const tagName of tagNames) {
-          // Find or create tag
-          let tag = await TagModel.findOne({ name: tagName });
-          if (!tag) {
-            tag = new TagModel({ name: tagName });
-            await tag.save();
-          }
-
-          // Create question-tag relationship
-          await this.addTagToQuestion(newQuestion.id, tag.id);
-        }
-      }
-
-      return this.documentToQuestion(newQuestion);
-    } catch (error) {
-      console.error('Error creating question:', error);
-      throw error;
-    }
+    // Use safe implementation for mock mode
+    return safeCreateQuestion(
+      userId,
+      question as any,
+      tagNames,
+      this.documentToQuestion.bind(this),
+      this.documentToTag.bind(this)
+    );
   }
 
   async updateQuestion(id: number, questionData: Partial<InsertQuestion>): Promise<Question | undefined> {
     try {
       const question = await QuestionModel.findOne({ id });
       if (!question) return undefined;
-
-      // Update the question fields
-      Object.assign(question, questionData);
-      question.updatedAt = new Date();
       
+      // Update fields
+      if (questionData.title) question.title = questionData.title;
+      if (questionData.content) question.content = questionData.content;
+      if (questionData.imageUrl !== undefined) question.imageUrl = questionData.imageUrl;
+      
+      question.updatedAt = new Date();
       await question.save();
+      
       return this.documentToQuestion(question);
     } catch (error) {
       console.error('Error updating question:', error);
@@ -423,6 +410,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async incrementQuestionViews(id: number): Promise<boolean> {
+    // Use the safe implementation when in mock mode
+    if (isMockMode()) {
+      return safeIncrementQuestionViews(id);
+    }
+
     try {
       const result = await QuestionModel.updateOne(
         { id },
@@ -468,6 +460,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllTags(): Promise<Tag[]> {
+    // Use the safe implementation when in mock mode
+    if (isMockMode()) {
+      return safeGetAllTags(this.documentToTag.bind(this));
+    }
+
     try {
       const tags = await TagModel.find();
       return tags.map(tag => this.documentToTag(tag));
@@ -538,10 +535,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAnswersByQuestionId(questionId: number): Promise<AnswerWithUser[]> {
+    // Use the safe implementation when in mock mode
+    if (isMockMode()) {
+      return safeGetAnswersByQuestionId(
+        questionId,
+        this.documentToAnswer.bind(this),
+        this.documentToUser.bind(this)
+      );
+    }
+
     try {
       const answers = await AnswerModel.find({ questionId });
       
-      const answersWithUsers = await Promise.all(answers.map(async (answer) => {
+      const answersWithUsers = await Promise.all(answers.map(async (answer: IAnswer) => {
         const user = await UserModel.findOne({ id: answer.userId });
         if (!user) throw new Error(`User not found for answer ${answer.id}`);
 
@@ -570,39 +576,35 @@ export class DatabaseStorage implements IStorage {
     try {
       const answers = await AnswerModel.find({ userId });
       
-      const answersWithDetails = await Promise.all(answers.map(async (answer) => {
-        const user = await UserModel.findOne({ id: userId });
-        if (!user) throw new Error(`User not found for answer ${answer.id}`);
-
-        const votesCount = await this.getVotesCount(undefined, answer.id);
-
+      // Convert to AnswerWithUser format
+      const userAnswers = await Promise.all(answers.map(async (answer: IAnswer) => {
+        const user = await this.getUser(answer.userId);
+        const question = await this.getQuestion(answer.questionId);
+        
         return {
           ...this.documentToAnswer(answer),
-          user: this.documentToUser(user),
-          votesCount
+          user: user || { id: 0, username: 'Unknown', avatarUrl: null },
+          question: question ? {
+            id: question.id,
+            title: question.title
+          } : { id: 0, title: 'Unknown Question' }
         };
       }));
-
-      return answersWithDetails;
+      
+      return userAnswers;
     } catch (error) {
-      console.error('Error getting answers by user ID:', error);
+      console.error('Error fetching answers by user ID:', error);
       return [];
     }
   }
 
   async createAnswer(userId: number, answer: InsertAnswer): Promise<Answer> {
-    try {
-      const newAnswer = new AnswerModel({
-        ...answer,
-        userId,
-        accepted: false
-      });
-      await newAnswer.save();
-      return this.documentToAnswer(newAnswer);
-    } catch (error) {
-      console.error('Error creating answer:', error);
-      throw error;
-    }
+    // Use safe implementation for mock mode
+    return safeCreateAnswer(
+      userId,
+      answer as any,
+      this.documentToAnswer.bind(this)
+    );
   }
 
   async updateAnswer(id: number, answerData: Partial<InsertAnswer>): Promise<Answer | undefined> {
@@ -895,7 +897,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getRecentChats(userId: number): Promise<Array<{user: User, lastMessage: Message, unreadCount: number}>> {
+    // Use safe implementation for mock mode
+    if (isMockMode()) {
+      return safeGetRecentChats(userId, this.documentToUser.bind(this));
+    }
+    
     try {
+      // In mock mode, avoid using MongoDB aggregation which requires an active connection
+      if (process.env.USE_MOCK_DB === 'true') {
+        console.log('Using mock implementation for getRecentChats');
+        return safeGetRecentChats(userId, this.documentToUser.bind(this));
+      }
+      
+      // Regular MongoDB implementation for non-mock mode
       // Find all users that have exchanged messages with this user
       const messagePartners = await MessageModel.aggregate([
         {
@@ -950,6 +964,7 @@ export class DatabaseStorage implements IStorage {
       );
     } catch (error) {
       console.error('Error getting recent chats:', error);
+      // Return a safe empty array instead of failing
       return [];
     }
   }

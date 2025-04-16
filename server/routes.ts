@@ -5,6 +5,7 @@ import { storage } from "./storage";
 import { setupAuth } from "./auth";
 import { connectToDatabase } from "./mongo-db";
 import { messageEvents } from "./models/message.model";
+import ImageFile from "./models/image-file.model";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -19,25 +20,17 @@ import {
 } from "@shared/schema";
 import { validate } from "uuid";
 
-// Configure multer for file uploads
-const storageDir = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(storageDir)) {
-  fs.mkdirSync(storageDir, { recursive: true });
-}
+// We'll use a simpler approach with Map to track WebSocket connections
+type WSConnection = {
+  ws: WebSocket;
+  isAlive: boolean;
+  userId: number | null;
+};
 
-const uploadStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, storageDir);
-  },
-  filename: (_req, file, cb) => {
-    // Generate a unique filename with original extension
-    const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(file.originalname)}`;
-    cb(null, uniqueName);
-  }
-});
-
+// Configure multer for memory storage (not disk storage)
+// This allows us to access the buffer for storing in MongoDB
 const upload = multer({
-  storage: uploadStorage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB limit
   },
@@ -51,34 +44,41 @@ const upload = multer({
   }
 });
 
+// For backward compatibility, we'll still maintain the uploads directory
+// for serving files (though we'll eventually remove this)
+const storageDir = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(storageDir)) {
+  fs.mkdirSync(storageDir, { recursive: true });
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   const isReplitEnv = process.env.REPL_ID || process.env.REPL_OWNER || process.env.REPL_SLUG;
   
   try {
-    // Initialize MongoDB connection
+    // Initialize MongoDB connection - handle errors gracefully
+    if (process.env.USE_MOCK_DB === 'true') {
+      console.log('Using mock data mode (USE_MOCK_DB=true)');
+    } else {
+      try {
     const mongooseInstance = await connectToDatabase();
-    
     if (mongooseInstance) {
       console.log('MongoDB connected successfully');
-    } else {
-      if (isReplitEnv) {
-        console.log('Using mock data for Replit environment');
-      } else {
-        throw new Error('MongoDB connection required for production environment');
-      }
     }
   } catch (error) {
     console.error('Failed to connect to MongoDB:', error);
-    
-    if (!isReplitEnv) {
-      throw new Error('MongoDB connection required for production environment');
-    } else {
-      console.log('Continuing with mock data for Replit environment');
+        console.log('Falling back to mock data mode');
+        // Force mock mode if connection fails
+        process.env.USE_MOCK_DB = 'true';
+      }
     }
+  } catch (error) {
+    console.error('Error initializing database:', error);
+    // Force mock mode if initialization fails
+    process.env.USE_MOCK_DB = 'true';
   }
 
-  // Set up authentication routes
-  setupAuth(app);
+  // Register authentication middleware
+  const { requireAuth, getCurrentUser } = setupAuth(app);
 
   // Add a health check endpoint for diagnostics
   app.get('/api/health', (req, res) => {
@@ -86,110 +86,168 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create HTTP server
-  const httpServer = createServer(app);
+  const server = createServer(app);
 
-  // Create WebSocket server
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
-  
-  // Map to keep track of connected clients by user ID
-  const connectedClients = new Map<number, WebSocket[]>();
-  
-  // Listen for message events from MongoDB
-  messageEvents.on('new_message', async (messageData: any) => {
-    // Notify the recipient via WebSocket if they're connected
-    const receiverId = messageData.receiverId;
-    
-    if (connectedClients.has(receiverId)) {
-      const recipientConnections = connectedClients.get(receiverId);
-      if (recipientConnections && recipientConnections.length > 0) {
-        console.log(`Sending message event notification to user ${receiverId}`);
-        
-        try {
-          // Get sender info to include in notification
-          const sender = await storage.getUser(messageData.senderId);
-          if (sender) {
-            const { password, ...senderWithoutPassword } = sender;
-            
-            // Send to all connections for this user
-            recipientConnections.forEach(ws => {
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'new_message',
-                  message: {
-                    ...messageData,
-                    sender: senderWithoutPassword
-                  }
-                }));
-              }
-            });
-          }
-        } catch (error) {
-          console.error('Error sending WebSocket message event:', error);
-        }
-      }
+  // Setup WebSocket server with proper error handling
+  const wss = new WebSocketServer({ 
+    server,
+    // Disable compression which can cause issues
+    perMessageDeflate: false,
+    // Set a reasonable max payload size
+    maxPayload: 50 * 1024, // 50KB
+    // Use a more generous ping timeout
+    clientTracking: true,
+    // Add WebSocket protocol validation
+    handleProtocols: (protocols: string[] | undefined) => {
+      // Accept any protocol or none
+      return protocols && protocols.length > 0 ? protocols[0] : false;
     }
   });
+
+  // Add server-level error handler
+  wss.on('error', (error) => {
+    console.error('WebSocket server error:', error);
+  });
+
+  // Track connected clients - keep connection objects in a map
+  const wsConnections = new Map<WebSocket, WSConnection>();
   
-  // Function to broadcast online users to all clients
-  const broadcastOnlineUsers = () => {
-    const onlineUserIds = Array.from(connectedClients.keys());
-    
-    const message = JSON.stringify({
-      type: 'online_users',
-      userIds: onlineUserIds
-    });
-    
-    // Send to all connected clients
-    wss.clients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
+  // Track user connections 
+  const userConnections = new Map<number, WebSocket[]>();
+
+  // Helper function to broadcast message to all connected clients of a user
+  const sendToUser = (userId: number, message: any) => {
+    const connections = userConnections.get(userId);
+    if (connections) {
+      const messageStr = JSON.stringify(message);
+      const validConnections: WebSocket[] = [];
+
+      connections.forEach(ws => {
+        try {
+              if (ws.readyState === WebSocket.OPEN) {
+            ws.send(messageStr);
+            validConnections.push(ws);
+          }
+        } catch (error) {
+          console.error(`Error sending message to user ${userId}:`, error);
+        }
+      });
+
+      // Update the connections with only valid ones
+      if (validConnections.length !== connections.length) {
+        userConnections.set(userId, validConnections);
       }
-    });
+    }
   };
 
-  // Set up WebSocket connection for chat with robust error handling
-  wss.on('connection', (ws, req) => {
-    console.log('WebSocket client connected');
-    let userId: number | null = null;
-    let pingInterval: NodeJS.Timeout | null = null;
-    let connectionAlive = true;
-    
-    // Enhance WebSocket with ping/pong for better connection management
-    ws.on('pong', () => {
-      connectionAlive = true;
-    });
-    
-    // Set up ping interval to detect dead connections
-    pingInterval = setInterval(() => {
-      if (!connectionAlive) {
-        console.log('WebSocket connection not responding - terminating');
-        ws.terminate();
+  // Helper function to broadcast online users to all clients
+  const broadcastOnlineUsers = async () => {
+    try {
+      // Get all online users (with unique user IDs)
+      const onlineUserIds = Array.from(userConnections.keys());
+      
+      // If no users are online, don't bother fetching user details
+      if (onlineUserIds.length === 0) return;
+      
+      // Fetch user details
+      const onlineUsers = await storage.getUsersByIds(onlineUserIds);
+      
+      // Broadcast to all connected clients
+      userConnections.forEach((_, userId) => {
+        sendToUser(userId, {
+          type: 'online-users',
+          users: onlineUsers.map(user => ({
+            id: user.id,
+            username: user.username,
+            avatarUrl: user.avatarUrl
+          }))
+        });
+      });
+    } catch (error) {
+      console.error('Error broadcasting online users:', error);
+    }
+  };
+  
+  // Set up ping interval to keep connections alive and detect stale ones
+  const pingInterval = setInterval(() => {
+    wsConnections.forEach((connection, ws) => {
+      // Check if websocket is still alive
+      if (!connection.isAlive) {
+        try {
+          wsConnections.delete(ws);
+          // Close properly, don't terminate immediately
+          ws.close();
+        } catch (err) {
+          console.error('Error closing WebSocket:', err);
+        }
         return;
       }
       
-      connectionAlive = false;
+      // Mark as inactive for next round of pings
+      connection.isAlive = false;
+      
+      // Send ping - with error handling
       try {
+        if (ws.readyState === WebSocket.OPEN) {
         ws.ping();
+        } else {
+          wsConnections.delete(ws);
+        }
       } catch (err) {
         console.error('Error sending ping:', err);
-        ws.terminate();
+        wsConnections.delete(ws);
+        try {
+          ws.close();
+        } catch (closeErr) {
+          // Already closed or error, ignore
+        }
       }
-    }, 30000); // Every 30 seconds
+    });
+  }, 30000);
+  
+  wss.on('close', () => {
+    clearInterval(pingInterval);
+  });
+
+  // Handle WebSocket connections
+  wss.on('connection', (ws, req) => {
+    console.log('WebSocket client connected');
     
-    // Send initial connection confirmation (with better error handling)
-    try {
-      ws.send(JSON.stringify({ type: 'connection', message: 'Connected to DevQuery chat' }));
-    } catch (err) {
-      console.error('Error sending initial connection message:', err);
-    }
+    // Handle socket-level errors
+    ws.on('error', (error) => {
+      console.error('WebSocket connection error:', error);
+      try {
+        ws.close();
+      } catch (e) {
+        // Already closed
+      }
+    });
+    
+    // Create connection object
+    const connection: WSConnection = {
+      ws,
+      isAlive: true,
+      userId: null
+    };
+    
+    // Store in our Map
+    wsConnections.set(ws, connection);
+    
+    // Set up pong handler to mark connection as alive
+    ws.on('pong', () => {
+      const conn = wsConnections.get(ws);
+      if (conn) {
+        conn.isAlive = true;
+      }
+    });
 
     ws.on('message', async (data) => {
       try {
         let message;
         try {
           message = JSON.parse(data.toString());
-        } catch (parseError) {
-          console.error('Invalid WebSocket message format:', data.toString());
+        } catch (e) {
+          console.error('Invalid JSON in WebSocket message:', e);
           ws.send(JSON.stringify({
             type: 'error',
             message: 'Invalid message format'
@@ -197,54 +255,116 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return;
         }
         
-        // Register client with a user ID
-        if (message.type === 'register') {
-          userId = parseInt(message.userId);
-          if (!isNaN(userId)) {
-            console.log(`Registering WebSocket client for user ID: ${userId}`);
-            
-            // Add this connection to the map
-            if (!connectedClients.has(userId)) {
-              connectedClients.set(userId, []);
-            }
-            connectedClients.get(userId)?.push(ws);
-            
-            // Confirm registration
-            try {
-              ws.send(JSON.stringify({
-                type: 'registered',
-                userId
-              }));
+        const connection = wsConnections.get(ws);
+        
+        if (!connection) {
+          console.error('WebSocket connection not found');
+          return;
+        }
+        
+        switch (message.type) {
+          case 'register':
+            // Associate this connection with a user ID
+            if (typeof message.userId === 'number') {
+              connection.userId = message.userId;
+              console.log(`Registering WebSocket client for user ID: ${connection.userId}`);
               
-              // Send current online users to the newly connected client
-              const onlineUserIds = Array.from(connectedClients.keys());
-              ws.send(JSON.stringify({
-                type: 'online_users',
-                userIds: onlineUserIds
-              }));
-              
-              // Broadcast updated online users list to all clients
-              broadcastOnlineUsers();
-            } catch (sendError) {
-              console.error('Error sending registration confirmation:', sendError);
+              // Add this connection to the user connections map - with proper type checking
+              if (connection.userId !== null) {
+                if (!userConnections.has(connection.userId)) {
+                  userConnections.set(connection.userId, []);
+                }
+                
+                const userWsList = userConnections.get(connection.userId);
+                if (userWsList && !userWsList.includes(ws)) {
+                  userWsList.push(ws);
+                }
+                
+                // Broadcast updated online users list
+                broadcastOnlineUsers();
+              }
             }
-          } else {
+            break;
+            
+          case 'message':
+            // Handle chat messages
+            if (connection.userId && message.receiverId && message.content) {
+              try {
+                // Create and save message to database
+                const newMessage = await storage.createMessage({
+                  senderId: connection.userId,
+                  receiverId: message.receiverId,
+                  content: message.content
+                });
+                
+                // Send to sender (acknowledgment + UI update)
+                if (connection.userId !== null) {
+                  sendToUser(connection.userId, {
+                    type: 'message-sent',
+                    message: newMessage
+                  });
+                }
+                
+                // Send to receiver if online
+                sendToUser(message.receiverId, {
+                  type: 'new-message',
+                  message: newMessage
+                });
+              } catch (error) {
+                console.error('Error creating message:', error);
+                if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                    type: 'error',
+                    message: 'Failed to send message'
+                  }));
+                }
+              }
+            }
+            break;
+            
+          case 'mark-read':
+            // Mark message as read
+            if (connection.userId && message.messageId) {
+              try {
+                const success = await storage.markMessageAsRead(message.messageId);
+                if (success && connection.userId !== null) {
+                  // Acknowledge to the user who marked it as read
+                  sendToUser(connection.userId, {
+                    type: 'message-read',
+                    messageId: message.messageId
+                  });
+                }
+              } catch (error) {
+                console.error('Error marking message as read:', error);
+                if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
               type: 'error',
-              message: 'Invalid user ID'
+                    message: 'Failed to mark message as read'
             }));
           }
         }
-        // We don't implement message sending via WebSocket anymore
-        // That's handled through the REST API
-        
+            }
+            break;
+
+          default:
+            // Unknown message type
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Unknown message type'
+              }));
+            }
+            break;
+        }
       } catch (error) {
         console.error('Error processing WebSocket message:', error);
         try {
+          if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'error',
             message: 'Error processing message'
           }));
+          }
         } catch (sendError) {
           console.error('Error sending error message:', sendError);
         }
@@ -254,18 +374,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ws.on('close', () => {
       console.log('WebSocket client disconnected');
       
-      // Remove this connection from the map if user was registered
-      if (userId !== null) {
-        const userConnections = connectedClients.get(userId);
-        if (userConnections) {
-          const index = userConnections.indexOf(ws);
+      // Get the connection info before deleting
+      const connection = wsConnections.get(ws);
+      
+      // Remove from wsConnections
+      wsConnections.delete(ws);
+      
+      // Remove from userConnections if associated with a user
+      if (connection && connection.userId !== null) {
+        const userWsList = userConnections.get(connection.userId);
+        
+        if (userWsList) {
+          const index = userWsList.indexOf(ws);
           if (index !== -1) {
-            userConnections.splice(index, 1);
+            userWsList.splice(index, 1);
           }
           
           // Remove the entry completely if no connections left
-          if (userConnections.length === 0) {
-            connectedClients.delete(userId);
+          if (userWsList.length === 0) {
+            userConnections.delete(connection.userId);
             
             // Broadcast updated online users list
             broadcastOnlineUsers();
@@ -276,16 +403,128 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // File upload endpoint
-  app.post('/api/upload', upload.single('image'), (req, res) => {
+  app.post('/api/upload', requireAuth, upload.single('image'), async (req: Request, res: Response) => {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
     }
     
-    const imageUrl = `/uploads/${req.file.filename}`;
+    try {
+      // Extract user ID from authenticated session
+      const userId = req.user?.id;
+      
+      const imageFileName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(req.file.originalname)}`;
+      
+      if (process.env.USE_MOCK_DB === 'true') {
+        // In mock mode, we'll still save to the file system
+        // for simplicity and backward compatibility
+        const filePath = path.join(storageDir, imageFileName);
+        
+        // Save to disk
+        fs.writeFileSync(filePath, req.file.buffer);
+        console.log(`Mock mode: Saved image to ${filePath}`);
+        
+        // Use old-style URL for mock mode
+        const imageUrl = `/uploads/${imageFileName}`;
+        return res.json({ imageUrl });
+      }
+      
+      // Create a new ImageFile document
+      const imageFile = new ImageFile({
+        filename: imageFileName,
+        originalname: req.file.originalname,
+        contentType: req.file.mimetype,
+        size: req.file.size,
+        data: req.file.buffer,
+        metadata: {
+          uploadedBy: userId
+        }
+      });
+      
+      // Save to MongoDB
+      const savedFile = await imageFile.save();
+      
+      // Return the URL for the image - using the image ID
+      // Get the ID with a type-safe approach
+      const imageId = process.env.USE_MOCK_DB === 'true' 
+        ? (savedFile as any).id
+        : (savedFile as any).id || (savedFile as any)._id;
+        
+      const imageUrl = `/api/images/${imageId}`;
     res.json({ imageUrl });
+    } catch (error) {
+      console.error('Error saving image:', error);
+      
+      // Fall back to file system if MongoDB storage fails
+      try {
+        const imageFileName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(req.file.originalname)}`;
+        const filePath = path.join(storageDir, imageFileName);
+        
+        // Save to disk
+        fs.writeFileSync(filePath, req.file.buffer);
+        console.log(`Fallback: Saved image to ${filePath}`);
+        
+        // Use old-style URL for fallback
+        const imageUrl = `/uploads/${imageFileName}`;
+        return res.json({ imageUrl });
+      } catch (fallbackError) {
+        console.error('Error in fallback image save:', fallbackError);
+        res.status(500).json({ message: 'Failed to save image' });
+      }
+    }
   });
 
-  // Serve uploaded files
+  // Image serving endpoint - return the image directly from MongoDB or fallback to filesystem
+  app.get('/api/images/:id', async (req, res) => {
+    try {
+      const imageId = parseInt(req.params.id);
+      if (isNaN(imageId)) {
+        return res.status(400).json({ message: 'Invalid image ID' });
+      }
+      
+      // Find the image in MongoDB
+      const imageFile = await ImageFile.findOne({ id: imageId });
+      if (!imageFile) {
+        // For backward compatibility - try to serve from filesystem
+        // Check if a file with this name exists in uploads directory
+        const files = fs.readdirSync(storageDir);
+        const matchingFile = files.find(file => file.includes(req.params.id));
+        
+        if (matchingFile) {
+          const filePath = path.join(storageDir, matchingFile);
+          return res.sendFile(filePath);
+        }
+        
+        return res.status(404).json({ message: 'Image not found' });
+      }
+      
+      // Set correct content type
+      res.contentType(imageFile.contentType);
+      
+      // Send the image data
+      res.send(imageFile.data);
+      
+    } catch (error) {
+      console.error('Error retrieving image:', error);
+      
+      // Try filesystem as fallback
+      try {
+        // For backward compatibility - try to serve from filesystem
+        const files = fs.readdirSync(storageDir);
+        const matchingFile = files.find(file => file.includes(req.params.id));
+        
+        if (matchingFile) {
+          const filePath = path.join(storageDir, matchingFile);
+          return res.sendFile(filePath);
+        }
+      } catch (fallbackError) {
+        console.error('Fallback retrieval failed:', fallbackError);
+      }
+      
+      res.status(500).json({ message: 'Failed to retrieve image' });
+    }
+  });
+
+  // For backward compatibility - serve uploaded files from disk
   app.use('/uploads', express.static(storageDir));
 
   // Questions routes
@@ -332,16 +571,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     try {
+      // First validate that required fields are present
+      if (!req.body.title || !req.body.content || req.body.content.trim() === '') {
+        return res.status(400).json({ 
+          message: 'Title and content are required', 
+          errors: [
+            !req.body.title ? { path: 'title', message: 'Title is required' } : null,
+            !req.body.content || req.body.content.trim() === '' ? { path: 'content', message: 'Content is required' } : null
+          ].filter(Boolean)
+        });
+      }
+      
+      // Then try to parse with Zod schema
       const validatedData = questionWithTagsSchema.parse(req.body);
       const { tags, ...questionData } = validatedData;
       
-      const question = await storage.createQuestion(req.user.id, questionData, tags);
+      // Create the question
+      const question = await storage.createQuestion(req.user.id, questionData, tags || []);
       res.status(201).json(question);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: 'Invalid question data', errors: error.errors });
       }
+      
+      // Better error handling for specific DB errors
       console.error('Error creating question:', error);
+      
+      // Check for specific MongoDB validation errors
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      if (errorMessage.includes('validation failed')) {
+        if (errorMessage.includes('content')) {
+          return res.status(400).json({ message: 'Question content is required' });
+        }
+      }
+      
       res.status(500).json({ message: 'Failed to create question' });
     }
   });
@@ -815,5 +1078,5 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  return httpServer;
+  return server;
 }

@@ -1,6 +1,7 @@
 import { IStorage } from './storage';
 import session from 'express-session';
 import MongoStore from 'connect-mongo';
+import createMemoryStore from 'memorystore';
 import { connectToDatabase } from './mongo-db';
 import { 
   User, InsertUser, 
@@ -13,6 +14,23 @@ import {
   Follow, InsertFollow,
   Message, InsertMessage
 } from '@shared/schema';
+import {
+  safeGetUserById,
+  safeGetUserByUsername,
+  safeCreateUser,
+  safeCreateQuestion,
+  safeGetQuestions,
+  safeGetQuestionWithDetails,
+  safeGetAnswersByQuestionId,
+  safeIncrementQuestionViews,
+  safeCreateAnswer,
+  safeGetAllTags,
+  safeGetRecentChats,
+  isMockMode
+} from './safeMockMode';
+
+// Setup memory store for sessions when no database is available
+const MemoryStore = createMemoryStore(session);
 
 // Import MongoDB models
 import UserModel, { IUser } from './models/user.model';
@@ -28,19 +46,35 @@ export class MongoStorage implements IStorage {
   sessionStore: session.Store;
 
   constructor() {
-    // Create MongoDB-based session store
-    this.sessionStore = MongoStore.create({
-      mongoUrl: process.env.MONGODB_URI || 'mongodb://localhost:27017/devquery',
-      collectionName: 'sessions',
-      ttl: 60 * 60 * 24, // 1 day
-      autoRemove: 'native',
-      crypto: {
-        secret: process.env.SESSION_SECRET || 'your-secret-key'
-      }
-    });
+    // Determine if we should use mock storage
+    const useMockDB = process.env.USE_MOCK_DB === 'true';
+    
+    if (useMockDB) {
+      // Use in-memory session store for mock mode
+      console.log('Using in-memory session store for mock database mode');
+      this.sessionStore = new MemoryStore({
+        checkPeriod: 86400000 // prune expired entries every 24h
+      });
+    } else {
+      // Create MongoDB-based session store
+      this.sessionStore = MongoStore.create({
+        mongoUrl: process.env.MONGODB_URI || 'mongodb://localhost:27017/devquery',
+        collectionName: 'sessions',
+        ttl: 60 * 60 * 24, // 1 day
+        autoRemove: 'native',
+        crypto: {
+          secret: process.env.SESSION_SECRET || 'your-secret-key'
+        }
+      }) as session.Store;
+    }
 
-    // Initialize database connection
-    this.initDatabase().catch(err => console.error('Failed to initialize MongoDB storage:', err));
+    // Initialize database connection (only if not in mock mode)
+    if (!useMockDB) {
+      this.initDatabase().catch(err => console.error('Failed to initialize MongoDB storage:', err));
+    } else {
+      console.log('Using mock MongoDB connection (USE_MOCK_DB=true)');
+      console.log('For real MongoDB, set USE_MOCK_DB=false and configure MONGODB_URI');
+    }
   }
 
   // Connect to MongoDB
@@ -61,6 +95,7 @@ export class MongoStorage implements IStorage {
       username: doc.username,
       email: doc.email,
       password: doc.password,
+      fullName: doc.fullName,
       bio: doc.bio,
       avatarUrl: doc.avatarUrl,
       role: doc.role,
@@ -137,34 +172,15 @@ export class MongoStorage implements IStorage {
 
   // User operations
   async getUser(id: number): Promise<User | undefined> {
-    try {
-      const user = await UserModel.findOne({ id });
-      return user ? this.documentToUser(user) : undefined;
-    } catch (error) {
-      console.error('Error getting user:', error);
-      return undefined;
-    }
+    return safeGetUserById(id, this.documentToUser.bind(this));
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    try {
-      const user = await UserModel.findOne({ username });
-      return user ? this.documentToUser(user) : undefined;
-    } catch (error) {
-      console.error('Error getting user by username:', error);
-      return undefined;
-    }
+    return safeGetUserByUsername(username, this.documentToUser.bind(this));
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    try {
-      const user = new UserModel(insertUser);
-      await user.save();
-      return this.documentToUser(user);
-    } catch (error) {
-      console.error('Error creating user:', error);
-      throw error;
-    }
+    return safeCreateUser(insertUser, this.documentToUser.bind(this));
   }
 
   async getUsersByIds(ids: number[]): Promise<User[]> {
@@ -269,7 +285,7 @@ export class MongoStorage implements IStorage {
         .limit(limit);
 
       // Get additional data for each question
-      const questionsWithDetails = await Promise.all(questions.map(async (question) => {
+      const questionsWithDetails = await Promise.all(questions.map(async (question: IQuestion) => {
         const user = await UserModel.findOne({ id: question.userId });
         if (!user) throw new Error(`User not found for question ${question.id}`);
 
@@ -302,7 +318,7 @@ export class MongoStorage implements IStorage {
       const questions = await QuestionModel.find({ userId });
       
       // Get additional data for each question
-      const questionsWithDetails = await Promise.all(questions.map(async (question) => {
+      const questionsWithDetails = await Promise.all(questions.map(async (question: IQuestion) => {
         const user = await UserModel.findOne({ id: userId });
         if (!user) throw new Error(`User not found for question ${question.id}`);
 
@@ -331,34 +347,13 @@ export class MongoStorage implements IStorage {
   }
 
   async createQuestion(userId: number, question: InsertQuestion, tagNames: string[]): Promise<Question> {
-    try {
-      // Create the question
-      const newQuestion = new QuestionModel({
-        ...question,
-        userId
-      });
-      await newQuestion.save();
-
-      // Process tags
-      if (tagNames && tagNames.length > 0) {
-        for (const tagName of tagNames) {
-          // Find or create tag
-          let tag = await TagModel.findOne({ name: tagName });
-          if (!tag) {
-            tag = new TagModel({ name: tagName });
-            await tag.save();
-          }
-
-          // Create question-tag relationship
-          await this.addTagToQuestion(newQuestion.id, tag.id);
-        }
-      }
-
-      return this.documentToQuestion(newQuestion);
-    } catch (error) {
-      console.error('Error creating question:', error);
-      throw error;
-    }
+    return safeCreateQuestion(
+      userId, 
+      question, 
+      tagNames,
+      this.documentToQuestion.bind(this),
+      this.documentToTag.bind(this)
+    );
   }
 
   async updateQuestion(id: number, questionData: Partial<InsertQuestion>): Promise<Question | undefined> {
@@ -520,7 +515,7 @@ export class MongoStorage implements IStorage {
     try {
       const answers = await AnswerModel.find({ questionId });
       
-      const answersWithUsers = await Promise.all(answers.map(async (answer) => {
+      const answersWithUsers = await Promise.all(answers.map(async (answer: IAnswer) => {
         const user = await UserModel.findOne({ id: answer.userId });
         if (!user) throw new Error(`User not found for answer ${answer.id}`);
 
@@ -544,7 +539,7 @@ export class MongoStorage implements IStorage {
     try {
       const answers = await AnswerModel.find({ userId });
       
-      const answersWithUsers = await Promise.all(answers.map(async (answer) => {
+      const answersWithUsers = await Promise.all(answers.map(async (answer: IAnswer) => {
         const user = await UserModel.findOne({ id: userId });
         if (!user) throw new Error(`User not found for answer ${answer.id}`);
 
@@ -565,17 +560,11 @@ export class MongoStorage implements IStorage {
   }
 
   async createAnswer(userId: number, answer: InsertAnswer): Promise<Answer> {
-    try {
-      const newAnswer = new AnswerModel({
-        ...answer,
-        userId
-      });
-      await newAnswer.save();
-      return this.documentToAnswer(newAnswer);
-    } catch (error) {
-      console.error('Error creating answer:', error);
-      throw error;
-    }
+    return safeCreateAnswer(
+      userId,
+      answer,
+      this.documentToAnswer.bind(this)
+    );
   }
 
   async updateAnswer(id: number, answerData: Partial<InsertAnswer>): Promise<Answer | undefined> {

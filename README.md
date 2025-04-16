@@ -128,11 +128,32 @@ If you prefer using a cloud-hosted MongoDB instance:
 - `client/`: React frontend
 - `server/`: Express backend
 - `shared/`: Shared types and schemas
-- `uploads/`: User uploaded files
+- `uploads/`: Legacy folder for previously uploaded files (support maintained for backward compatibility)
 
 ## Available Scripts
 
 - `npm run dev`: Start the development server
+- `npx tsx server/scripts/migrate-uploads.ts`: Migrate existing image uploads from filesystem to MongoDB
+
+## Image Storage
+
+DevQuery now uses MongoDB for storing uploaded images instead of the filesystem:
+
+1. Images are stored as binary data in the MongoDB database using the GridFS-like approach
+2. This improves deployment portability and eliminates filesystem dependencies
+3. The `/api/upload` endpoint processes uploads and stores them in MongoDB
+4. Images are served through the `/api/images/:id` endpoint
+
+If you're upgrading from a previous version that used filesystem storage, run the migration script:
+```bash
+npx tsx server/scripts/migrate-uploads.ts
+```
+
+This script will:
+- Scan the uploads directory for existing images
+- Store each image in MongoDB
+- Update question and answer documents to reference the new image locations
+- Preserve backward compatibility for existing image URLs
 
 ## Important Information for Downloaders
 

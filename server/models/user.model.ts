@@ -16,7 +16,8 @@ export interface IUser extends Document {
 
 // Schema for MongoDB
 const userSchema = new Schema<IUser>({
-  id: { type: Number, required: true },
+  // Make id field not required initially - we'll handle it in the pre-save hook
+  id: { type: Number, required: false },
   username: { type: String, required: true },
   email: { type: String, required: true },
   password: { type: String, required: true },
@@ -40,6 +41,14 @@ userSchema.pre('save', async function(next) {
   // Skip if ID is already set
   if (!this.id) {
     try {
+      // In mock mode, don't try to query the database
+      if (process.env.USE_MOCK_DB === 'true') {
+        // Just generate a random ID for mock mode
+        this.id = Math.floor(Math.random() * 100000) + 1;
+        this.updatedAt = new Date();
+        return next();
+      }
+      
       // Find the maximum ID in the collection
       const maxUser = await User.findOne({}, {}, { sort: { id: -1 } });
       
