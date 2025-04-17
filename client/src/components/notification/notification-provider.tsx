@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, ReactNode } from "react
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { User } from "@shared/schema";
+import { toast as showToast } from "@/hooks/use-toast";
 
 // Define the message type for WebSocket
 type WebSocketMessage = {
@@ -183,7 +184,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
                     setUnreadCount((prev) => prev + 1);
                     
                     // Show toast notification
-                    toast({
+                    showToast({
                       title: "New message",
                       description: `You have a new message from ${message.message?.sender?.username || 'a user'}`,
                     });
@@ -211,7 +212,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
               case 'notification':
                 // Handle other notifications (e.g., question updates, etc.)
                 if (message.content) {
-                  toast({
+                  showToast({
                     title: "Notification",
                     description: message.content,
                   });
@@ -221,7 +222,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
               case 'error':
                 // Handle server error message
                 console.error('Server WebSocket error:', message.content);
-                toast({
+                showToast({
                   variant: "destructive",
                   title: "Connection Error",
                   description: message.content || "Something went wrong with the connection",
@@ -276,19 +277,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   // Add ping interval to keep connection alive
   useEffect(() => {
-    if (!socket) return;
-    
-    const pingInterval = setInterval(() => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({
-          type: "ping"
-        }));
+    const interval = setInterval(() => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'ping' }));
       }
-    }, 30000); // Every 30 seconds
-    
-    return () => {
-      clearInterval(pingInterval);
-    };
+    }, 30000);
+    return () => clearInterval(interval);
   }, [socket]);
 
   return (

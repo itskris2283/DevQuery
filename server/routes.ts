@@ -19,6 +19,7 @@ import {
   insertFollowSchema
 } from "@shared/schema";
 import { validate } from "uuid";
+import UserModel from "./models/user.model";
 
 // We'll use a simpler approach with Map to track WebSocket connections
 type WSConnection = {
@@ -110,7 +111,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Helper function to safely send messages to clients
   const safeSend = (ws: WebSocket, message: any) => {
     try {
-      if (ws.readyState === WebSocket.OPEN) {
+              if (ws.readyState === WebSocket.OPEN) {
         ws.send(typeof message === 'string' ? message : JSON.stringify(message));
       }
     } catch (error) {
@@ -163,8 +164,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userConnections.forEach((_, userId) => {
           sendToUser(userId, {
             type: 'online-users',
-            userIds: onlineUserIds
-          });
+      userIds: onlineUserIds
+    });
         });
         return;
       }
@@ -301,7 +302,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 }
                 
                 // Broadcast updated online users list
-                broadcastOnlineUsers();
+              broadcastOnlineUsers();
               }
             }
             break;
@@ -342,7 +343,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               } catch (error) {
                 console.error('Error creating message:', error);
                 safeSend(ws, {
-                  type: 'error',
+              type: 'error',
                   message: 'Failed to send message'
                 });
               }
@@ -464,7 +465,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const offset = parseInt(req.query.offset as string) || 0;
       const sortBy = (req.query.sortBy as string) || 'newest';
       const filter = req.query.filter as string;
-
+      
       const questions = await storage.getQuestions({ limit, offset, sortBy, filter });
       
       return res.json(questions);
@@ -488,7 +489,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!question) {
         return res.status(404).json({ message: 'Question not found' });
       }
-
+      
       // Increment view count
       await storage.incrementQuestionViews(id);
       
@@ -655,7 +656,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body
       const validationResult = insertAnswerSchema.partial().safeParse(req.body);
       if (!validationResult.success) {
-        return res.status(400).json({
+        return res.status(400).json({ 
           message: 'Invalid answer data',
           errors: validationResult.error.format()
         });
@@ -788,6 +789,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error getting tags:', error);
       return res.status(500).json({ message: 'Failed to fetch tags' });
+    }
+  });
+  
+  // Get user by ID
+  app.get('/api/users/:id', async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      
+      if (isNaN(userId)) {
+        return res.status(400).json({ message: 'Invalid user ID' });
+      }
+      
+      const user = await storage.getUser(userId);
+      
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      // Don't return password
+      const { password, ...userWithoutPassword } = user;
+      
+      // Get counts
+      const questionsCount = (await storage.getQuestionsByUserId(userId)).length;
+      const answersCount = (await storage.getAnswersByUserId(userId)).length;
+      const followerCount = await storage.getFollowerCount(userId);
+      const followingCount = await storage.getFollowingCount(userId);
+      
+      return res.json({
+        ...userWithoutPassword,
+        questionsCount,
+        answersCount,
+        followerCount,
+        followingCount
+      });
+    } catch (error) {
+      console.error('Error getting user:', error);
+      return res.status(500).json({ message: 'Failed to fetch user' });
+    }
+  });
+
+  // Get user's questions
+  app.get('/api/users/:id/questions', async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      
+      if (isNaN(userId)) {
+        return res.status(400).json({ message: 'Invalid user ID' });
+      }
+      
+      const questions = await storage.getQuestionsByUserId(userId);
+      return res.json(questions);
+    } catch (error) {
+      console.error('Error getting user questions:', error);
+      return res.status(500).json({ message: 'Failed to fetch user questions' });
+    }
+  });
+
+  // Get user's answers
+  app.get('/api/users/:id/answers', async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      
+      if (isNaN(userId)) {
+        return res.status(400).json({ message: 'Invalid user ID' });
+      }
+      
+      const answers = await storage.getAnswersByUserId(userId);
+      return res.json(answers);
+    } catch (error) {
+      console.error('Error getting user answers:', error);
+      return res.status(500).json({ message: 'Failed to fetch user answers' });
+    }
+  });
+  
+  // Update user profile
+  app.patch('/api/users/profile', requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+      
+      const { username, bio } = req.body;
+      
+      // If updating username, check if it's already taken
+      if (username && username !== user.username) {
+        const existingUser = await storage.getUserByUsername(username);
+        if (existingUser && existingUser.id !== user.id) {
+          return res.status(400).json({ message: 'Username already exists' });
+        }
+      }
+      
+      // Find the user in the database
+      const userDoc = await UserModel.findOne({ id: user.id });
+      if (!userDoc) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      // Update fields
+      if (username) userDoc.username = username;
+      if (bio !== undefined) userDoc.bio = bio;
+      userDoc.updatedAt = new Date();
+      
+      // Save the updated user
+      await userDoc.save();
+      
+      // Get updated user
+      const updatedUser = await storage.getUser(user.id);
+      if (!updatedUser) {
+        return res.status(500).json({ message: 'Failed to retrieve updated user profile' });
+      }
+      
+      // Don't return password
+      const { password, ...userWithoutPassword } = updatedUser;
+      
+      // Update the session
+      req.login(updatedUser, (err) => {
+        if (err) {
+          console.error('Error updating session:', err);
+          return res.status(500).json({ message: 'Failed to update session' });
+        }
+        
+        return res.json(userWithoutPassword);
+      });
+    } catch (error) {
+      console.error('Error updating user profile:', error);
+      return res.status(500).json({ message: 'Failed to update profile' });
     }
   });
   

@@ -7,6 +7,7 @@ import { promisify } from "util";
 import { storage } from "./storage";
 import { User as SelectUser, insertUserSchema } from "@shared/schema";
 import { z } from "zod";
+import UserModel from "./models/user.model";
 
 declare global {
   namespace Express {
@@ -199,6 +200,60 @@ export function setupAuth(app: Express) {
     // Return user info without password
     const { password, ...userWithoutPassword } = req.user;
     res.json(userWithoutPassword);
+  });
+
+  // Change password endpoint
+  app.post("/api/users/change-password", async (req, res) => {
+    try {
+      // Check if user is authenticated
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      
+      const { currentPassword, newPassword } = req.body;
+      
+      // Validate input
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({ message: "Current password and new password are required" });
+      }
+      
+      // Get the current user
+      const user = await storage.getUser(req.user.id);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // Special handling for mock mode
+      if (process.env.USE_MOCK_DB === 'true') {
+        console.log('Mock mode: Password change simulated');
+        return res.status(200).json({ message: "Password updated successfully" });
+      }
+      
+      // Verify current password
+      const isPasswordValid = await comparePasswords(currentPassword, user.password);
+      if (!isPasswordValid) {
+        return res.status(400).json({ message: "Current password is incorrect" });
+      }
+      
+      // Hash new password
+      const hashedPassword = await hashPassword(newPassword);
+      
+      // Update user in database with new password
+      const userDoc = await UserModel.findOne({ id: user.id });
+      if (!userDoc) {
+        return res.status(404).json({ message: "User not found in database" });
+      }
+      
+      // Update password
+      userDoc.password = hashedPassword;
+      userDoc.updatedAt = new Date();
+      await userDoc.save();
+      
+      return res.status(200).json({ message: "Password updated successfully" });
+    } catch (error) {
+      console.error("Error changing password:", error);
+      return res.status(500).json({ message: "Failed to change password. Please try again later." });
+    }
   });
 
   // Authentication middleware for protected routes

@@ -22,6 +22,9 @@ export interface IStorage {
   // Session store
   sessionStore: session.Store;
 
+  // Error severity level
+  severity: string;
+
   // User operations
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;

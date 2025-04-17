@@ -7,6 +7,7 @@ import {
   HelpCircle,
   CheckSquare,
   UserPlus,
+  Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -19,16 +20,27 @@ type SidebarProps = {
   onClose: () => void;
 };
 
+type Chat = {
+  id: number;
+  userId: number;
+  username: string;
+  unreadCount: number;
+  lastMessage: string;
+  lastMessageDate: string;
+};
+
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const [location, navigate] = useLocation();
 
   // Get messages for notification count
-  const { data: chats } = useQuery({
+  const { data: chats } = useQuery<Chat[]>({
     queryKey: ['/api/messages/chats'],
   });
 
   // Calculate unread messages
-  const unreadCount = chats?.reduce((count, chat) => count + chat.unreadCount, 0) || 0;
+  const unreadCount = Array.isArray(chats) 
+    ? chats.reduce((count: number, chat: Chat) => count + chat.unreadCount, 0) 
+    : 0;
 
   const navigationItems = [
     { 
@@ -74,6 +86,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       label: "Following", 
       icon: <UserPlus className="h-5 w-5 mr-3" />, 
       path: "/following" 
+    },
+    { 
+      label: "Settings", 
+      icon: <Settings className="h-5 w-5 mr-3" />, 
+      path: "/settings" 
     },
   ];
 

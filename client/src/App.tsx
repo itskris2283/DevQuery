@@ -22,6 +22,7 @@ import FollowingPage from "@/pages/following-page";
 import MyQuestionsPage from "@/pages/my-questions-page";
 import MyAnswersPage from "@/pages/my-answers-page";
 import TagsPage from "@/pages/tags-page";
+import SettingsPage from "@/pages/settings-page";
 
 function Router() {
   return (
@@ -38,6 +39,7 @@ function Router() {
       {/* User routes */}
       <ProtectedRoute path="/users" component={UsersPage} />
       <ProtectedRoute path="/users/:id" component={UserProfilePage} />
+      <ProtectedRoute path="/settings" component={SettingsPage} />
       
       {/* User activity routes */}
       <ProtectedRoute path="/messages" component={MessagesPage} />

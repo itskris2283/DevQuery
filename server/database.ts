@@ -51,6 +51,7 @@ const MemoryStore = createMemoryStore(session);
 
 export class DatabaseStorage implements IStorage {
   sessionStore: session.Store;
+  severity = 'error'; // Default error severity
 
   constructor() {
     // Determine if we should use mock storage
